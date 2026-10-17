@@ -1,0 +1,917 @@
+/**
+ * AI 判分系统 - 后端服务
+ * 纯 Node.js 内置模块实现，零第三方依赖，需 Node.js 18+（用到全局 fetch）。
+ *
+ * 数据存储：data/db.json
+ * 服务配置：data/settings.json（可在网页「设置」页修改，无需改代码）
+ *
+ * AI 服务（任意 OpenAI 兼容接口）按以下顺序自动选择：
+ *   1. 网页「设置」页保存的配置（data/settings.json）
+ *   2. 环境变量 AI_BASE_URL / AI_API_KEY / AI_MODEL（或 OPENAI_BASE_URL / OPENAI_API_KEY / OPENAI_MODEL）
+ *   3. 本机 WorkBuddy 模型网关（WORKBUDDY_VLM_* 环境变量，仅在本机可用）
+ *
+ * 启动参数：PORT（默认 3210）、HOST（默认 0.0.0.0，局域网内其他电脑/手机可直接访问；
+ *          设为 127.0.0.1 则仅本机可访问）
+ */
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const DATA_DIR = path.join(__dirname, 'data');
+const DB_FILE = path.join(DATA_DIR, 'db.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+
+const START_PORT = Number(process.env.PORT) || 3210;
+const HOST = process.env.HOST || '0.0.0.0';
+let activePort = START_PORT;
+
+// ---------------- 账号与归属 ----------------
+// 与前端 AUTH 规则保持一致：教师 00000-00005，学生 26006-26200，密码=账号
+const AUTH = { teacher: { from: 0, to: 5 }, student: { from: 26006, to: 26200 } };
+const LEGACY_OWNER = '00000';   // 历史题目/提交的默认归属教师
+
+function roleOfAccount(acc) {
+  const s = String(acc || '').trim();
+  if (!/^\d{5}$/.test(s)) return null;
+  const n = Number(s);
+  if (n >= AUTH.teacher.from && n <= AUTH.teacher.to) return 'teacher';
+  if (n >= AUTH.student.from && n <= AUTH.student.to) return 'student';
+  return null;
+}
+/** 从 X-Account 请求头取当前登录账号（沿用前端登录体系，服务端只做权限校验） */
+function accountOf(req) {
+  const s = String(req.headers['x-account'] || '').trim();
+  return roleOfAccount(s) ? s : null;
+}
+/** 题目的出题教师 */
+function ownerOf(q) { return (q && q.ownerAccount) || LEGACY_OWNER; }
+
+// ---------------- 数据存储 ----------------
+let db = { questions: [], submissions: [], seq: 1 };
+
+function loadDb() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (fs.existsSync(DB_FILE)) {
+    try {
+      db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      if (!db.questions) db.questions = [];
+      if (!db.submissions) db.submissions = [];
+      if (!db.seq) db.seq = 1;
+      // 历史数据没有出题人：统一归属到 00000，避免旧题目变成孤儿
+      db.questions.forEach(q => { if (!q.ownerAccount) q.ownerAccount = LEGACY_OWNER; });
+    } catch (e) {
+      console.error('[db] 读取失败，使用空库:', e.message);
+    }
+  }
+}
+function saveDb() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = DB_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+  fs.renameSync(tmp, DB_FILE);
+}
+function nextId(prefix) { return prefix + '_' + (db.seq++); }
+
+// ---------------- 云端数据源（本机与线上共用同一份数据） ----------------
+// data/cloud.json 存在时，所有读写都直接落到云数据库：
+//   本机（localhost / 局域网）改动 → 立即写入云端 → 线上页面刷新即可看到，反之亦然。
+// 删除 data/cloud.json 即可退回纯本机 data/db.json 存储。
+const CLOUD_FILE = path.join(DATA_DIR, 'cloud.json');
+let cloudCfg = null;
+/**
+ * 云服务配置来源（按优先级）：
+ *   1. 环境变量 CLOUD_ENDPOINT / CLOUD_PUBLISHABLE_KEY（部署平台推荐，密钥不进仓库）
+ *   2. data/cloud.json（本机开发用，已在 .gitignore 中，不入库）
+ * 注意：这里的 publishableKey 是「公开标识键」，云端只按来源域名识别应用；
+ * 真正需要保密的是大模型 API Key，它由教师在「设置」页填写，存服务端，永不写进代码。
+ */
+function loadCloudCfg() {
+  cloudCfg = null;
+  const envEndpoint = String(process.env.CLOUD_ENDPOINT || '').trim();
+  const envKey = String(process.env.CLOUD_PUBLISHABLE_KEY || '').trim();
+  if (envEndpoint && envKey) {
+    cloudCfg = { endpoint: envEndpoint, publishableKey: envKey, source: 'env' };
+    return;
+  }
+  try {
+    if (!fs.existsSync(CLOUD_FILE)) return;
+    const c = JSON.parse(fs.readFileSync(CLOUD_FILE, 'utf8'));
+    if (c && c.endpoint && c.publishableKey) cloudCfg = c;
+  } catch (e) {
+    console.error('[cloud] 配置读取失败，退回本机存储:', e.message);
+  }
+}
+const cloudOn = () => !!cloudCfg;
+
+async function cloudFetch(pathAndQuery, opts) {
+  opts = opts || {};
+  const url = cloudCfg.endpoint.replace(/\/+$/, '') + '/.cloud/database/rest/' + pathAndQuery;
+  const headers = Object.assign({
+    'x-wb-webapp-access-key': cloudCfg.publishableKey,
+    'Content-Type': 'application/json',
+  }, opts.headers || {});
+  const res = await fetch(url, {
+    method: opts.method || 'GET',
+    headers,
+    body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+  });
+  const text = await res.text();
+  let data = null;
+  if (text) { try { data = JSON.parse(text); } catch (_) { data = text; } }
+  if (!res.ok) {
+    const msg = (data && (data.message || data.error_description || data.error)) || ('云端请求失败 HTTP ' + res.status);
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  }
+  return data;
+}
+
+function mapQFromCloud(r) {
+  return {
+    id: String(r.id), title: r.title, question: r.question, rubric: r.rubric,
+    maxScore: Number(r.max_score), ownerAccount: r.owner_account || LEGACY_OWNER,
+    createdAt: r.created_at,
+  };
+}
+function mapSubFromCloud(r) {
+  return {
+    id: String(r.id), questionId: String(r.question_id), studentName: r.student_name,
+    account: r.account || '', answer: r.answer, status: r.status, aiStatus: r.ai_status,
+    aiScore: r.ai_score == null ? null : Number(r.ai_score),
+    aiBreakdown: Array.isArray(r.ai_breakdown) ? r.ai_breakdown : [],
+    aiSummary: r.ai_summary || '', aiDurationMs: r.ai_duration_ms,
+    aiModel: r.ai_model, aiError: r.ai_error,
+    teacherScore: r.teacher_score == null ? null : Number(r.teacher_score),
+    teacherComment: r.teacher_comment || '',
+    createdAt: r.created_at, confirmedAt: r.confirmed_at,
+  };
+}
+
+const Store = {
+  async questions() {
+    if (!cloudOn()) return db.questions;
+    const rows = await cloudFetch('questions?select=*&order=created_at.desc');
+    return (rows || []).map(mapQFromCloud);
+  },
+  async submissions() {
+    if (!cloudOn()) return db.submissions;
+    const rows = await cloudFetch('submissions?select=*&order=created_at.desc');
+    return (rows || []).map(mapSubFromCloud);
+  },
+  async createQuestion(q) {
+    if (cloudOn()) {
+      const rows = await cloudFetch('questions', {
+        method: 'POST',
+        headers: { Prefer: 'return=representation' },
+        body: { title: q.title, question: q.question, rubric: q.rubric, max_score: q.maxScore, owner_account: q.ownerAccount },
+      });
+      return mapQFromCloud(rows[0]);
+    }
+    q.id = nextId('q');
+    q.createdAt = new Date().toISOString();
+    db.questions.unshift(q);
+    saveDb();
+    return q;
+  },
+  async deleteQuestion(q) {
+    if (cloudOn()) {
+      await cloudFetch('questions?id=eq.' + encodeURIComponent(q.id), { method: 'DELETE' });
+      return;
+    }
+    db.questions = db.questions.filter(x => x.id !== q.id);
+    db.submissions = db.submissions.filter(s => s.questionId !== q.id);
+    saveDb();
+  },
+  async createSubmission(sub) {
+    if (cloudOn()) {
+      const rows = await cloudFetch('submissions', {
+        method: 'POST',
+        headers: { Prefer: 'return=representation' },
+        body: {
+          question_id: Number(sub.questionId), student_name: sub.studentName,
+          account: sub.account || null, answer: sub.answer,
+          status: 'pending', ai_status: 'grading',
+        },
+      });
+      return mapSubFromCloud(rows[0]);
+    }
+    sub.id = nextId('s');
+    sub.createdAt = new Date().toISOString();
+    db.submissions.unshift(sub);
+    saveDb();
+    return sub;
+  },
+  async saveSubmission(sub) {
+    if (!cloudOn()) { saveDb(); return sub; }
+    await cloudFetch('submissions?id=eq.' + encodeURIComponent(sub.id), {
+      method: 'PATCH',
+      body: {
+        status: sub.status,
+        ai_status: sub.aiStatus,
+        ai_score: sub.aiScore,
+        ai_breakdown: sub.aiBreakdown || [],
+        ai_summary: sub.aiSummary || '',
+        ai_duration_ms: sub.aiDurationMs == null ? null : Math.round(sub.aiDurationMs),
+        ai_model: sub.aiModel || null,
+        ai_error: sub.aiError == null ? null : String(sub.aiError),
+        teacher_score: sub.teacherScore == null ? null : sub.teacherScore,
+        teacher_comment: sub.teacherComment || '',
+        confirmed_at: sub.confirmedAt || null,
+      },
+    });
+    return sub;
+  },
+  async resetOwner(acc) {
+    if (!cloudOn()) {
+      const mine = new Set(db.questions.filter(q => ownerOf(q) === acc).map(q => q.id));
+      db.questions = db.questions.filter(q => !mine.has(q.id));
+      db.submissions = db.submissions.filter(s => !mine.has(s.questionId));
+      saveDb();
+      return mine.size;
+    }
+    const rows = await cloudFetch('questions?select=id&owner_account=eq.' + encodeURIComponent(acc));
+    for (const r of rows || []) {
+      await cloudFetch('questions?id=eq.' + encodeURIComponent(r.id), { method: 'DELETE' });
+    }
+    return (rows || []).length;
+  },
+};
+
+// ---------------- 设置 ----------------
+let settings = { llm: null }; // { baseUrl, endpoint, apiKey, model, stream, provider }
+
+function loadSettings() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (fs.existsSync(SETTINGS_FILE)) {
+    try { settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || { llm: null }; }
+    catch (e) { console.error('[settings] 读取失败:', e.message); }
+  }
+  if (!settings.llm) settings.llm = null;
+}
+function saveSettings() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = SETTINGS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2));
+  fs.renameSync(tmp, SETTINGS_FILE);
+}
+
+// 常见 OpenAI 兼容服务预设，便于换电脑后一键填好
+const PRESETS = [
+  { id: 'deepseek', label: 'DeepSeek（深度求索）', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat', note: '国内直连，性价比高，需在 platform.deepseek.com 申请 Key' },
+  { id: 'dashscope', label: '通义千问（阿里云百炼）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', note: '阿里云控制台申请 Key' },
+  { id: 'moonshot', label: 'Kimi（月之暗面）', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k', note: 'platform.moonshot.cn 申请 Key' },
+  { id: 'zhipu', label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-plus', note: 'open.bigmodel.cn 申请 Key' },
+  { id: 'siliconflow', label: '硅基流动 SiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct', note: '聚合多种开源模型' },
+  { id: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini', note: '需可访问外网' },
+  { id: 'ollama', label: '本地 Ollama（无需联网/无需 Key）', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', note: '需先在本机运行 ollama serve 并 pull 模型，API Key 随意填' },
+  { id: 'custom', label: '自定义 / 其他兼容接口', baseUrl: '', model: '', note: '只要兼容 OpenAI 的 /chat/completions 协议即可' },
+];
+
+/** 把 Base URL 规范化成完整的 chat/completions 地址 */
+function toChatEndpoint(base) {
+  const b = String(base || '').trim().replace(/\/+$/, '');
+  if (!b) return '';
+  if (/\/chat\/completions$/.test(b)) return b;
+  return b + '/chat/completions';
+}
+function hostOf(url) {
+  try { const u = new URL(url); return u.host; } catch (_) { return url; }
+}
+
+/** 解析当前生效的 AI 服务配置；返回 null 表示未配置 */
+function resolveLLM() {
+  const s = settings.llm;
+  if (s && s.baseUrl && s.model) {
+    return {
+      source: 'settings', label: s.provider || '自定义',
+      endpoint: s.endpoint || toChatEndpoint(s.baseUrl),
+      apiKey: s.apiKey || '', model: s.model, headers: {},
+      stream: s.stream !== false,
+    };
+  }
+  const base = process.env.AI_BASE_URL || process.env.OPENAI_BASE_URL;
+  const key = process.env.AI_API_KEY || process.env.OPENAI_API_KEY;
+  const model = process.env.AI_MODEL || process.env.OPENAI_MODEL;
+  if (base && model) {
+    return { source: 'env', label: '环境变量', endpoint: toChatEndpoint(base), apiKey: key || '', model, headers: {}, stream: true };
+  }
+  if (process.env.WORKBUDDY_VLM_CHAT_URL && process.env.WORKBUDDY_VLM_AUTH_TOKEN) {
+    return {
+      source: 'workbuddy', label: '本机 WorkBuddy 网关',
+      endpoint: process.env.WORKBUDDY_VLM_CHAT_URL,
+      apiKey: process.env.WORKBUDDY_VLM_AUTH_TOKEN,
+      model: process.env.WORKBUDDY_VLM_MODEL || 'kinfra-office-agent',
+      headers: { 'X-WorkBuddy-MCP-Context': process.env.WORKBUDDY_VLM_CONTEXT || '' },
+      stream: true,
+    };
+  }
+  return null;
+}
+
+// ---------------- LLM 调用 ----------------
+function buildHeaders(cfg) {
+  const h = { 'Content-Type': 'application/json' };
+  Object.assign(h, cfg.headers || {});
+  if (cfg.apiKey) h['Authorization'] = 'Bearer ' + cfg.apiKey;
+  return h;
+}
+
+/** 单次请求（stream 或非 stream），返回聚合后的文本 */
+async function requestOnce(cfg, messages, stream, timeoutMs) {
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(new Error('AI 请求超时（' + Math.round(timeoutMs / 1000) + ' 秒）')), timeoutMs);
+  try {
+    const res = await fetch(cfg.endpoint, {
+      method: 'POST',
+      headers: buildHeaders(cfg),
+      body: JSON.stringify({ model: cfg.model, messages, stream }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error('AI 服务返回 HTTP ' + res.status + '：' + text.slice(0, 300));
+    }
+    const ctype = res.headers.get('content-type') || '';
+    let content = '', usage = null, model = cfg.model;
+
+    if (/text\/event-stream/.test(ctype)) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line.startsWith('data:')) continue;      // 跳过 ": heartbeat" 等
+          const payload = line.slice(5).trim();
+          if (!payload || payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            if (j.model) model = j.model;
+            const d = j.choices && j.choices[0] && (j.choices[0].delta || {});
+            if (typeof d.content === 'string') content += d.content;
+            if (j.usage) usage = j.usage;
+          } catch (_) { /* 忽略无法解析的行 */ }
+        }
+      }
+    } else {
+      const j = await res.json();
+      model = j.model || model;
+      usage = j.usage || null;
+      const c = j.choices && j.choices[0];
+      content = (c && ((c.message && c.message.content) || c.text)) || '';
+      if (typeof content !== 'string') content = JSON.stringify(content);
+    }
+
+    if (!content.trim()) throw new Error('AI 返回内容为空');
+    return { content, usage, elapsedMs: Date.now() - t0, model };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 带智能重试的调用：
+ *  - 服务商不支持当前流式模式 → 换另一种模式重试
+ *  - 瞬时故障（空响应 / 超时 / 网络抖动 / 5xx）→ 同模式再试一次
+ *  - 其他错误（如 401 鉴权失败、404 地址错误）→ 直接抛出，不做无意义重试
+ */
+async function callLLM(messages, timeoutMs = 180000, cfgOverride) {
+  const cfg = cfgOverride || resolveLLM();
+  if (!cfg) {
+    throw new Error('尚未配置 AI 服务：请打开「设置」页填写服务地址、API Key 和模型，或设置环境变量 AI_BASE_URL / AI_API_KEY / AI_MODEL');
+  }
+  const primary = cfg.stream !== false;
+  let firstErr = null;
+
+  try {
+    return await requestOnce(cfg, messages, primary, timeoutMs);
+  } catch (e) {
+    firstErr = e;
+  }
+
+  const msg = String(firstErr.message || '');
+  const streamUnsupported = /non-?stream|stream[\s\S]{0,30}(not supported|不支持)|不支持[\s\S]{0,10}流式/i.test(msg);
+  const transient = /为空|超时|aborted|fetch failed|network|ECONN|socket hang|HTTP 5\d\d/i.test(msg);
+
+  let retryStream = null;
+  if (streamUnsupported) retryStream = !primary;      // 换模式
+  else if (transient) retryStream = primary;          // 同模式重试
+
+  if (retryStream === null) throw firstErr;
+
+  await new Promise(r => setTimeout(r, 400));
+  try {
+    return await requestOnce(cfg, messages, retryStream, timeoutMs);
+  } catch (e2) {
+    // 两次错误不同时，把首次错误一并带上，避免降级重试掩盖真实原因
+    const m2 = String(e2.message || '');
+    if (!streamUnsupported && m2 !== msg) {
+      throw new Error(msg + '（重试后仍失败：' + m2 + '）');
+    }
+    throw e2;
+  }
+}
+
+// ---------------- 判分 ----------------
+function buildGradePrompt(q, answer) {
+  const rubric = (q.rubric || '').trim();
+  return [
+    '你是一名严谨、公正的阅卷老师，正在批改学生提交的主观题答案。',
+    '你必须严格依据给定的评分标准逐条评分：有则给分、无则扣分，理由要引用学生答案中的具体内容作为证据，不得凭印象打分。',
+    '',
+    '# 题目',
+    q.question,
+    '',
+    '# 评分标准（满分 ' + q.maxScore + ' 分）',
+    rubric,
+    '',
+    '# 学生答案',
+    answer,
+    '',
+    '# 输出要求',
+    '只输出一个 JSON 对象，不要输出任何解释文字，不要使用 markdown 代码块。格式：',
+    '{"total": 总分数字, "breakdown": [{"criterion": "评分标准条目", "score": 该条得分, "max": 该条满分, "comment": "该条评分理由，须引用答案原文作为依据"}], "summary": "总体评价 2~3 句：先说优点，再说主要失分点"}',
+    '要求：breakdown 必须覆盖评分标准的每一条；total 等于 breakdown 各条得分之和；总分不得超过 ' + q.maxScore + '，可以为小数（精确到 0.5）。',
+  ].join('\n');
+}
+
+function extractJson(text) {
+  let t = String(text).trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) t = fence[1].trim();
+  const s = t.indexOf('{');
+  const e = t.lastIndexOf('}');
+  if (s >= 0 && e > s) t = t.slice(s, e + 1);
+  return JSON.parse(t);
+}
+
+function round05(x) { return Math.round(x * 2) / 2; }
+
+async function gradeSubmission(sub, q) {
+  sub.aiStatus = 'grading';
+  await Store.saveSubmission(sub);
+  try {
+    const { content, elapsedMs, usage, model } = await callLLM([
+      { role: 'system', content: '你是一名严格依据评分标准阅卷的老师，只输出 JSON。' },
+      { role: 'user', content: buildGradePrompt(q, sub.answer) },
+    ]);
+    let parsed;
+    try {
+      parsed = extractJson(content);
+    } catch (e) {
+      throw new Error('AI 返回内容无法解析为评分 JSON：' + content.slice(0, 200));
+    }
+    const max = Number(q.maxScore) || 100;
+    let total = Number(parsed.total);
+    if (!isFinite(total)) throw new Error('AI 返回的 total 不是数字');
+    total = Math.min(max, Math.max(0, round05(total)));
+    const breakdown = Array.isArray(parsed.breakdown) ? parsed.breakdown.map(b => ({
+      criterion: String(b.criterion || ''),
+      score: Number(b.score) || 0,
+      max: Number(b.max) || 0,
+      comment: String(b.comment || ''),
+    })) : [];
+    sub.aiScore = total;
+    sub.aiBreakdown = breakdown;
+    sub.aiSummary = String(parsed.summary || '');
+    sub.aiDurationMs = elapsedMs;
+    sub.aiModel = model;
+    sub.aiTokens = usage ? { prompt: usage.prompt_tokens, completion: usage.completion_tokens, total: usage.total_tokens } : null;
+    sub.aiError = null;
+    sub.aiGradedAt = new Date().toISOString();
+    sub.aiStatus = 'done';
+    if (sub.status !== 'confirmed') sub.status = 'ai_graded';
+  } catch (e) {
+    sub.aiStatus = 'failed';
+    sub.aiError = String(e.message || e);
+  }
+  await Store.saveSubmission(sub);
+  return sub;
+}
+
+// ---------------- HTTP 基础 ----------------
+function sendJson(res, code, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(body);
+}
+function readBody(req, limit = 2 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0; const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new Error('请求体过大')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('utf8');
+      if (!raw) return resolve({});
+      try { resolve(JSON.parse(raw)); } catch (e) { reject(new Error('JSON 解析失败')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+/** 供前端展示的 AI 服务状态（不泄露 API Key） */
+function llmInfo() {
+  const cfg = resolveLLM();
+  if (!cfg) return { configured: false, presets: PRESETS };
+  return {
+    configured: true,
+    presets: PRESETS,
+    source: cfg.source,               // settings / env / workbuddy
+    label: cfg.label,
+    model: cfg.model,
+    endpointHost: hostOf(cfg.endpoint),
+    hasApiKey: !!cfg.apiKey,
+    savedBaseUrl: (settings.llm && settings.llm.baseUrl) || '',
+    savedModel: (settings.llm && settings.llm.model) || '',
+    savedStream: settings.llm ? settings.llm.stream !== false : true,
+    savedProvider: (settings.llm && settings.llm.provider) || '',
+  };
+}
+
+// ---------------- API 路由 ----------------
+async function handleApi(req, res, pathname) {
+  if (req.method === 'GET' && pathname === '/api/state') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    const cfg = resolveLLM();
+    const isTeacher = roleOfAccount(acc) === 'teacher';
+    // 教师：只返回自己出的题目和自己的判分记录；学生：可看到全部题目，只返回自己的提交
+    let questions, submissions;
+    try {
+      questions = await Store.questions();
+      submissions = await Store.submissions();
+    } catch (e) {
+      return sendJson(res, 502, { error: '云端数据读取失败：' + e.message + '（检查本机网络或 data/cloud.json）' });
+    }
+    if (isTeacher) {
+      questions = questions.filter(q => ownerOf(q) === acc);
+      const ids = new Set(questions.map(q => q.id));
+      submissions = submissions.filter(s => ids.has(s.questionId));
+    } else {
+      // 学生只看自己的提交：以登录账号为准，兼容历史数据（无 account 时比对姓名）
+      submissions = submissions.filter(s => s.account ? s.account === acc : s.studentName === acc);
+    }
+    return sendJson(res, 200, {
+      // owner 与云端 owner_account 对齐，前端统一读 owner
+      questions: questions.map(q => Object.assign({}, q, { owner: ownerOf(q) })),
+      submissions,
+      viewer: { account: acc, role: isTeacher ? 'teacher' : 'student' },
+      storage: cloudOn() ? 'cloud' : 'local',
+      llmConfigured: !!cfg,
+      llmLabel: cfg ? cfg.label : '',
+      llmModel: cfg ? cfg.model : '',
+    });
+  }
+
+  // ---- 访问地址信息（给「设置」页展示，方便分发给其他电脑） ----
+  if (req.method === 'GET' && pathname === '/api/info') {
+    const lan = HOST === '0.0.0.0' ? lanAddresses() : [];
+    const fwdHost = req.headers['x-forwarded-host'] || req.headers.host || ('127.0.0.1:' + activePort);
+    const fwdProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0] || 'http';
+    return sendJson(res, 200, {
+      port: activePort,
+      host: HOST,
+      lanAllowed: HOST === '0.0.0.0',
+      currentUrl: fwdProto + '://' + fwdHost,
+      localUrl: 'http://127.0.0.1:' + activePort,
+      lanUrls: lan.map(a => 'http://' + a + ':' + activePort),
+      platform: process.platform,
+      storage: cloudOn() ? 'cloud' : 'local',
+      cloudEndpoint: cloudOn() ? cloudCfg.endpoint : '',
+    });
+  }
+
+  // ---- 设置 ----
+  if (req.method === 'GET' && pathname === '/api/settings') {
+    return sendJson(res, 200, llmInfo());
+  }
+
+  if (req.method === 'POST' && pathname === '/api/settings') {
+    const b = await readBody(req, 64 * 1024);
+    const baseUrl = String(b.baseUrl || '').trim();
+    if (!baseUrl) {           // 清空 = 恢复自动检测
+      settings.llm = null; saveSettings();
+      return sendJson(res, 200, llmInfo());
+    }
+    const model = String(b.model || '').trim();
+    if (!model) return sendJson(res, 400, { error: '请填写模型名称' });
+    let apiKey = b.apiKey === undefined ? null : String(b.apiKey);
+    if (apiKey === null || apiKey === '') apiKey = (settings.llm && settings.llm.apiKey) || ''; // 留空表示不修改
+    settings.llm = {
+      provider: String(b.provider || '').trim(),
+      baseUrl,
+      endpoint: toChatEndpoint(baseUrl),
+      apiKey,
+      model,
+      stream: b.stream !== false,
+    };
+    saveSettings();
+    return sendJson(res, 200, llmInfo());
+  }
+
+  if (req.method === 'POST' && pathname === '/api/settings/test') {
+    const b = await readBody(req, 64 * 1024);
+    let cfg;
+    if (b.baseUrl && b.model) {           // 测试页面上尚未保存的配置
+      const key = (b.apiKey && String(b.apiKey)) || (settings.llm && settings.llm.apiKey) || '';
+      cfg = { source: 'test', label: '测试', endpoint: toChatEndpoint(b.baseUrl), apiKey: key, model: b.model, headers: {}, stream: b.stream !== false };
+    } else {
+      cfg = resolveLLM();
+      if (!cfg) return sendJson(res, 400, { ok: false, error: '尚未配置 AI 服务' });
+    }
+    try {
+      const r = await callLLM([{ role: 'user', content: '请只回复四个字：连接成功' }], 60000, cfg);
+      return sendJson(res, 200, { ok: true, reply: r.content.trim().slice(0, 100), model: r.model, elapsedMs: r.elapsedMs });
+    } catch (e) {
+      return sendJson(res, 200, { ok: false, error: String(e.message || e) });
+    }
+  }
+
+  // ---- 题目 ----
+  if (req.method === 'POST' && pathname === '/api/questions') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'teacher') return sendJson(res, 403, { error: '只有教师账号可以出题' });
+    const b = await readBody(req, 1024 * 1024);
+    const title = String(b.title || '').trim();
+    const question = String(b.question || '').trim();
+    const rubric = String(b.rubric || '').trim();
+    const maxScore = Math.min(1000, Math.max(1, Number(b.maxScore) || 100));
+    if (!title || !question || !rubric) return sendJson(res, 400, { error: '题目标题、题目内容和评分标准均不能为空' });
+    const q = {
+      title, question, rubric, maxScore,
+      ownerAccount: acc,            // 出题教师：只有本人能看到和更改
+    };
+    try {
+      const saved = await Store.createQuestion(q);
+      return sendJson(res, 200, { question: saved });
+    } catch (e) {
+      return sendJson(res, 502, { error: '题目保存失败：' + e.message });
+    }
+  }
+
+  let m = pathname.match(/^\/api\/questions\/([\w-]+)$/);
+  if (req.method === 'DELETE' && m) {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'teacher') return sendJson(res, 403, { error: '只有教师账号可以删除题目' });
+    const id = m[1];
+    let all;
+    try { all = await Store.questions(); } catch (e) { return sendJson(res, 502, { error: '云端数据读取失败：' + e.message }); }
+    const target = all.find(q => q.id === id);
+    if (!target) return sendJson(res, 404, { error: '题目不存在' });
+    if (ownerOf(target) !== acc) return sendJson(res, 403, { error: '这是其他教师发布的题目，你无权删除' });
+    try {
+      await Store.deleteQuestion(target);   // 云端外键为级联删除，提交记录一并清掉
+      return sendJson(res, 200, { removed: 1 });
+    } catch (e) {
+      return sendJson(res, 502, { error: '删除失败：' + e.message });
+    }
+  }
+
+  // ---- 提交与判分 ----
+  if (req.method === 'POST' && pathname === '/api/submissions') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    const b = await readBody(req, 1024 * 1024);
+    let allQ;
+    try { allQ = await Store.questions(); } catch (e) { return sendJson(res, 502, { error: '云端数据读取失败：' + e.message }); }
+    const q = allQ.find(x => x.id === String(b.questionId));
+    if (!q) return sendJson(res, 400, { error: '题目不存在' });
+    // 提交记录归属出题教师；学生端姓名默认用登录账号
+    const studentName = String(b.studentName || '').trim() || acc;
+    const answer = String(b.answer || '').trim();
+    if (!answer) return sendJson(res, 400, { error: '答案不能为空' });
+    let sub;
+    try {
+      sub = await Store.createSubmission({
+        questionId: q.id, studentName, account: acc, answer,
+        ownerAccount: ownerOf(q),    // 判分记录归出题教师
+        status: 'pending',           // pending -> ai_graded -> confirmed
+        aiStatus: 'pending',         // pending / grading / done / failed
+        aiScore: null, aiBreakdown: [], aiSummary: '', aiDurationMs: null,
+        teacherScore: null, teacherComment: '', confirmedAt: null,
+      });
+    } catch (e) {
+      return sendJson(res, 502, { error: '提交保存失败：' + e.message });
+    }
+    await gradeSubmission(sub, q);
+    return sendJson(res, 200, { submission: sub });
+  }
+
+  m = pathname.match(/^\/api\/submissions\/([\w-]+)\/grade$/);
+  if (req.method === 'POST' && m) {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'teacher') return sendJson(res, 403, { error: '只有教师账号可以判分' });
+    let subs, allQ;
+    try { subs = await Store.submissions(); allQ = await Store.questions(); } catch (e) { return sendJson(res, 502, { error: '云端数据读取失败：' + e.message }); }
+    const sub = subs.find(x => x.id === m[1]);
+    if (!sub) return sendJson(res, 404, { error: '提交不存在' });
+    const q = allQ.find(x => x.id === sub.questionId);
+    if (!q) return sendJson(res, 400, { error: '对应题目已被删除' });
+    if (ownerOf(q) !== acc) return sendJson(res, 403, { error: '这是其他教师题目下的提交，你无权判分' });
+    await gradeSubmission(sub, q);
+    return sendJson(res, 200, { submission: sub });
+  }
+
+  m = pathname.match(/^\/api\/submissions\/([\w-]+)\/confirm$/);
+  if (req.method === 'POST' && m) {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'teacher') return sendJson(res, 403, { error: '只有教师账号可以确认成绩' });
+    let subs, allQ;
+    try { subs = await Store.submissions(); allQ = await Store.questions(); } catch (e) { return sendJson(res, 502, { error: '云端数据读取失败：' + e.message }); }
+    const sub = subs.find(x => x.id === m[1]);
+    if (!sub) return sendJson(res, 404, { error: '提交不存在' });
+    const q = allQ.find(x => x.id === sub.questionId);
+    const owner = sub.ownerAccount || (q ? ownerOf(q) : LEGACY_OWNER);
+    if (owner !== acc) return sendJson(res, 403, { error: '这是其他教师题目下的提交，你无权改分' });
+    const b = await readBody(req, 64 * 1024);
+    const max = q ? q.maxScore : 100;
+    let score = Number(b.teacherScore);
+    if (!isFinite(score)) return sendJson(res, 400, { error: '分数必须是数字' });
+    score = Math.min(max, Math.max(0, round05(score)));
+    sub.teacherScore = score;
+    sub.teacherComment = String(b.teacherComment || '').trim();
+    sub.status = 'confirmed';
+    sub.confirmedAt = new Date().toISOString();
+    try { await Store.saveSubmission(sub); } catch (e) { return sendJson(res, 502, { error: '成绩保存失败：' + e.message }); }
+    return sendJson(res, 200, { submission: sub });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/reset') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'teacher') return sendJson(res, 403, { error: '只有教师账号可以重置数据' });
+    // 危险操作：启用云端存储后会真的删掉云端数据，必须显式确认
+    const b = await readBody(req, 8 * 1024).catch(() => ({}));
+    if (!b || b.confirm !== 'DELETE_MINE') {
+      return sendJson(res, 400, {
+        error: '危险操作：这会删除你名下的全部题目与判分记录，确认请传 {"confirm":"DELETE_MINE"}',
+      });
+    }
+    // 只清空自己的题目与判分记录，不影响其他教师
+    try {
+      const removed = await Store.resetOwner(acc);
+      return sendJson(res, 200, { ok: true, removed, storage: cloudOn() ? 'cloud' : 'local' });
+    } catch (e) {
+      return sendJson(res, 502, { error: '重置失败：' + e.message });
+    }
+  }
+
+  return sendJson(res, 404, { error: '接口不存在' });
+}
+
+// ---------------- 静态文件 ----------------
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+};
+function notFound(res) {
+  res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+  res.end('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">' +
+    '<title>页面不存在 · AI 判分系统</title></head>' +
+    '<body style="font-family:system-ui,-apple-system,sans-serif;padding:56px 24px;text-align:center;color:#222">' +
+    '<h1 style="font-size:20px;margin:0 0 10px">页面不存在</h1>' +
+    '<p style="color:#666;font-size:14px;margin:0 0 18px">这个地址在系统里没有对应的页面。</p>' +
+    '<p><a href="/" style="color:#2563eb;font-size:14px">返回 AI 判分系统首页</a></p>' +
+    '</body></html>');
+}
+
+/**
+ * 前端运行时配置：/cloud-config.js 由服务端动态生成。
+ * 这样 endpoint / publishableKey 只存在于运行环境的配置里（env 或 data/cloud.json），
+ * 仓库里的代码没有任何密钥字面量；未配置时前端会退回本机 /api 存储。
+ */
+function serveCloudConfig(res) {
+  const c = cloudCfg || {};
+  const cfg = {
+    endpoint: c.endpoint || '',
+    oauthRelayBaseUrl: c.oauthRelayBaseUrl || 'https://www.workbuddy.cn/v2/as/genie-baas/oauth',
+    publishableKey: c.publishableKey || '',
+  };
+  const body = '/* 由 server.js 运行时生成，内容取决于环境变量或 data/cloud.json，请勿写入密钥 */\n' +
+    'window.CLOUD_PUBLIC_CONFIG = ' + JSON.stringify(cfg, null, 2) + ';\n' +
+    'window.CLOUD_SDK_URL = ' + JSON.stringify(process.env.CLOUD_SDK_URL ||
+      'https://cdn.jsdelivr.net/npm/@tencent-ai/workbuddy-cloud-sdk@dev/lib/index.global.js') + ';\n';
+  res.writeHead(200, {
+    'Content-Type': 'application/javascript; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  res.end(body);
+}
+
+function serveStatic(res, pathname) {
+  let rel;
+  try { rel = pathname === '/' ? 'index.html' : decodeURIComponent(pathname.slice(1)); }
+  catch (_) { return notFound(res); }
+  if (rel === 'favicon.ico') { res.writeHead(204); return res.end(); }
+  const file = path.normalize(path.join(PUBLIC_DIR, rel));
+  if (!file.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
+  fs.readFile(file, (err, data) => {
+    if (!err) {
+      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
+      return res.end(data);
+    }
+    // 不带扩展名的路径（如 /teacher、/login）按单页应用处理，回退到首页，
+    // 避免用户看到的是一行 Not Found
+    if (!path.extname(rel)) {
+      return fs.readFile(path.join(PUBLIC_DIR, 'index.html'), (e2, html) => {
+        if (e2) return notFound(res);
+        res.writeHead(200, { 'Content-Type': MIME['.html'] });
+        res.end(html);
+      });
+    }
+    notFound(res);
+  });
+}
+
+// ---------------- 启动 ----------------
+function lanAddresses() {
+  const out = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const i of ifaces[name] || []) {
+      if (i.family === 'IPv4' && !i.internal) out.push(i.address);
+    }
+  }
+  return out;
+}
+
+function start(port, attempt) {
+  const server = http.createServer((req, res) => {
+    const pathname = new URL(req.url, 'http://localhost').pathname;
+    // 访问不到时把真实路径打到控制台，方便排查「Not Found」是哪个地址引起的
+    res.on('finish', () => {
+      if (res.statusCode >= 400) {
+        console.log('[访问异常] ' + res.statusCode + ' ' + req.method + ' ' + req.url);
+      }
+    });
+    if (pathname.startsWith('/api/')) {
+      handleApi(req, res, pathname).catch(e => {
+        console.error('[api]', e);
+        if (!res.headersSent) sendJson(res, 500, { error: e.message || '服务器内部错误' });
+      });
+      return;
+    }
+    if (pathname === '/cloud-config.js') { serveCloudConfig(res); return; }
+    serveStatic(res, pathname);
+  });
+
+  server.on('error', e => {
+    if (e.code === 'EADDRINUSE' && attempt < 10) {
+      console.warn('[AI 判分系统] 端口 ' + port + ' 被占用，尝试 ' + (port + 1) + ' …');
+      start(port + 1, attempt + 1);
+      return;
+    }
+    console.error('[AI 判分系统] 启动失败：', e.message);
+    process.exit(1);
+  });
+
+  server.listen(port, HOST, () => {
+    activePort = port;
+    const cfg = resolveLLM();
+    const lan = lanAddresses();
+    console.log('==================================================');
+    console.log(' AI 判分系统 已启动');
+    console.log(' 本机访问:     http://127.0.0.1:' + port);
+    if (HOST === '0.0.0.0') {
+      if (lan.length) {
+        console.log(' 其他电脑访问: 用下面任意一个地址（同一局域网/WiFi 内即可）');
+        lan.forEach(a => console.log('               http://' + a + ':' + port));
+        console.log('               （把链接发给学生，他们用浏览器打开就能提交答案）');
+      } else {
+        console.log(' 其他电脑访问: 未检测到可用的局域网 IP，请检查网络连接');
+      }
+    } else {
+      console.log(' 其他电脑访问: 已关闭（当前 HOST=' + HOST + '，仅本机可用）');
+      console.log('               如需开放，用 HOST=0.0.0.0 启动');
+    }
+    console.log(' AI 服务:     ' + (cfg ? cfg.label + ' / ' + cfg.model + '（' + hostOf(cfg.endpoint) + '）' : '未配置 —— 请打开页面「设置」填写'));
+    console.log(' 数据存储:     ' + (cloudOn()
+      ? '云端数据库（与线上共用同一份数据）' + cloudCfg.endpoint
+      : '本机 data/db.json（未启用云端同步）'));
+    console.log(' 按 Ctrl+C 停止服务');
+    console.log('==================================================');
+  });
+}
+
+loadDb();
+loadSettings();
+loadCloudCfg();
+start(START_PORT, 0);

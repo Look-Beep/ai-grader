@@ -1,0 +1,99 @@
+{
+  "question": {
+    "id": "q_1",
+    "title": "议论文片段 · 手机对中学生的影响",
+    "question": "请以\"智能手机对中学生的影响\"为主题，写一段 150 字左右的议论文片段。要求：观点明确；至少给出两个具体论据；结尾有总结句。",
+    "rubric": "观点明确，立场清晰（2分）\n论据一：具体、切题，能支撑观点（2.5分）\n论据二：具体、切题，且与论据一角度不同（2.5分）\n结尾有总结句（2分）\n语言通顺，字数接近150字（1分）",
+    "maxScore": 10,
+    "createdAt": "2026-10-17T01:23:45.618Z"
+  },
+  "rows": [
+    {
+      "name": "学生A（优秀）",
+      "aiScore": 10,
+      "aiSummary": "该片段结构完整，观点明确，论据具体且从不同角度有效支撑了论点，结尾总结有力。字数控制得当，语言通顺，完全符合题目要求，无失分点。",
+      "aiDurationMs": 16710,
+      "wallMs": 16719,
+      "model": "kinfra-office-agent",
+      "tokens": {
+        "prompt": 481,
+        "completion": 442,
+        "total": 923
+      },
+      "humanScore": 9.5,
+      "humanNote": "观点2分；论据一（查词/学习App/成绩提高十多分）具体2.5分；论据二（班级群、与同学视频、纪录片）角度不同2.5分；总结句2分；语言通顺、约160字，略长扣0.5分。",
+      "humanSeconds": 150
+    },
+    {
+      "name": "学生B（良好）",
+      "aiScore": 8.5,
+      "aiSummary": "优点在于观点鲜明，论据正反两面覆盖全面，且有清晰的总结句。主要失分点在于字数严重不足，未达到150字的要求，且第二个论据的详细程度略逊于第一个。",
+      "aiDurationMs": 19277,
+      "wallMs": 20667,
+      "model": "kinfra-office-agent",
+      "tokens": {
+        "prompt": 427,
+        "completion": 504,
+        "total": 931
+      },
+      "humanScore": 8,
+      "humanNote": "观点基本明确1.5分；论据一（查资料、效率高）偏笼统1.5分；论据二（沉迷游戏影响视力成绩）具体2分；总结句2分；语言通顺但明显不足150字0.5分，合计8分。",
+      "humanSeconds": 130
+    },
+    {
+      "name": "学生C（中等）",
+      "aiScore": 9,
+      "aiSummary": "该答案观点鲜明，结构完整，正反两方面论据具体且角度互补，逻辑清晰。主要失分点在于字数严重不足，未满足'150字左右'的基本要求。",
+      "aiDurationMs": 15482,
+      "wallMs": 16704,
+      "model": "kinfra-office-agent",
+      "tokens": {
+        "prompt": 411,
+        "completion": 446,
+        "total": 857
+      },
+      "humanScore": 5.5,
+      "humanNote": "观点\"影响很大\"未亮明立场1分；论据一（联系父母同学、查资料）具体2分；论据二（上课玩、视力）较笼统1.5分；无总结句0分；语言通顺但字数不足0.5分，合计5.5分。",
+      "humanSeconds": 120
+    },
+    {
+      "name": "学生D（较差）",
+      "aiScore": 2,
+      "aiSummary": "优点在于观点明确且第一个论据具体切题，语言也较为通顺。主要失分点在于第二个论据未能提供与第一个论据不同的独特角度（均为强调便利性/娱乐性），且结尾仅为观点的简单复述，缺乏对论据的有效归纳。",
+      "aiDurationMs": 78421,
+      "wallMs": 78429,
+      "model": "kinfra-office-agent",
+      "tokens": {
+        "prompt": 397,
+        "completion": 2045,
+        "total": 2442
+      },
+      "humanScore": 2,
+      "humanNote": "'中学生都应该有手机'算一个立场但不清晰0.5分；'玩游戏看视频聊天'与题目'影响'的分析关联弱，作论据勉强1分；无论据二0分；无总结句0分；语言通顺但仅约70字0.5分，合计2分。",
+      "humanSeconds": 100
+    },
+    {
+      "name": "学生E（跑题）",
+      "aiScore": 0.5,
+      "aiSummary": "优点在于语句简短通顺。主要失分点在于严重偏题，未体现议论文特征，缺乏必要的论据和总结，字数远低于要求。",
+      "aiDurationMs": 19208,
+      "wallMs": 19217,
+      "model": "kinfra-office-agent",
+      "tokens": {
+        "prompt": 368,
+        "completion": 434,
+        "total": 802
+      },
+      "humanScore": 0.5,
+      "humanNote": "无观点、无论据、无总结、仅6字，仅语言本身通顺给0.5分。",
+      "humanSeconds": 60
+    }
+  ],
+  "stats": {
+    "exact": 4,
+    "near": 4,
+    "avgAbsDiff": 0.9,
+    "pearson": 0.9451707806439918,
+    "avgAiMs": 29819.6
+  }
+}

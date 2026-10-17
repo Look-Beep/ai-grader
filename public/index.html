@@ -1,0 +1,1215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI 判分系统</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --border: #e4e7ec; --text: #1f2329;
+    --muted: #6b7280; --primary: #3b6ef5; --primary-weak: #eef3fe;
+    --ok: #16a34a; --ok-bg: #e9f7ee; --warn: #d97706; --warn-bg: #fdf3e3;
+    --err: #dc2626; --err-bg: #fdeaea;
+    --radius: 12px; --shadow: 0 1px 3px rgba(16,24,40,.06), 0 1px 2px rgba(16,24,40,.04);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; font-size: 14px; }
+  header { background: var(--card); border-bottom: 1px solid var(--border); padding: 14px 24px;
+    display: flex; align-items: center; gap: 24px; position: sticky; top: 0; z-index: 10; }
+  .logo { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .logo .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--primary); display: inline-block; }
+  nav { display: flex; gap: 4px; }
+  nav button { border: none; background: transparent; padding: 8px 16px; border-radius: 8px;
+    cursor: pointer; font-size: 14px; color: var(--muted); }
+  nav button.active { background: var(--primary-weak); color: var(--primary); font-weight: 600; }
+  .llm-badge { margin-left: auto; font-size: 12px; color: var(--muted); }
+  .llm-badge .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+  .st.on { background: var(--ok); } .st.off { background: var(--err); }
+  main { max-width: 980px; margin: 20px auto 60px; padding: 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 20px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 14px; display: flex; align-items: center; gap: 8px; }
+  h2 .hint { font-weight: 400; font-size: 12px; color: var(--muted); }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 5px; }
+  label b { color: var(--text); font-weight: 600; }
+  input[type=text], input[type=number], input[type=password], textarea, select {
+    width: 100%; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px;
+    font-size: 14px; font-family: inherit; background: #fff; color: var(--text); outline: none; }
+  input:focus, textarea:focus, select:focus { border-color: var(--primary); }
+  textarea { resize: vertical; min-height: 84px; line-height: 1.6; }
+  .row { display: flex; gap: 12px; } .row > * { flex: 1; }
+  .btn { border: none; border-radius: 8px; padding: 9px 18px; font-size: 14px; cursor: pointer;
+    background: var(--primary); color: #fff; font-weight: 500; }
+  .btn:hover { filter: brightness(1.06); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+  .btn.ghost { background: #fff; color: var(--text); border: 1px solid var(--border); font-weight: 400; }
+  .btn.sm { padding: 5px 12px; font-size: 13px; }
+  .mt { margin-top: 14px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 12px; }
+  .badge.wait { background: var(--warn-bg); color: var(--warn); }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.err { background: var(--err-bg); color: var(--err); }
+  .badge.info { background: var(--primary-weak); color: var(--primary); }
+  .q-item { border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin-bottom: 10px;
+    cursor: pointer; display: flex; align-items: center; gap: 12px; }
+  .q-item:hover { border-color: var(--primary); }
+  .q-item.sel { border-color: var(--primary); background: var(--primary-weak); }
+  .q-item .t { font-weight: 600; }
+  .q-item .m { color: var(--muted); font-size: 12px; }
+  .sub { border: 1px solid var(--border); border-radius: 10px; margin-bottom: 14px; overflow: hidden; }
+  .sub-head { padding: 14px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .sub-head .name { font-weight: 600; }
+  .sub-head .time { color: var(--muted); font-size: 12px; }
+  .score-big { font-size: 24px; font-weight: 700; color: var(--primary); margin-left: auto; }
+  .score-big small { font-size: 13px; color: var(--muted); font-weight: 400; }
+  .score-big.teacher { color: var(--ok); }
+  .sub-body { padding: 0 16px 16px; border-top: 1px dashed var(--border); }
+  .ans { background: #f8f9fb; border-radius: 8px; padding: 10px 14px; line-height: 1.7; white-space: pre-wrap; margin-top: 12px; }
+  details summary { cursor: pointer; color: var(--primary); font-size: 13px; margin-top: 10px; user-select: none; }
+  table.brk { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+  table.brk th, table.brk td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  table.brk th { background: #f8f9fb; font-weight: 600; }
+  table.brk td.sc { white-space: nowrap; font-weight: 600; }
+  .summary-box { background: var(--primary-weak); border-radius: 8px; padding: 10px 14px; margin-top: 10px; line-height: 1.7; }
+  .grade-row { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; flex-wrap: wrap; }
+  .grade-row .f { display: flex; flex-direction: column; }
+  .grade-row .f.score { width: 120px; flex: none; }
+  .grade-row .f.cmt { flex: 1; min-width: 220px; }
+  .spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--border);
+    border-top-color: var(--primary); border-radius: 50%; animation: r 0.8s linear infinite; vertical-align: -2px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  .toast { position: fixed; top: 70px; left: 50%; transform: translateX(-50%); background: #1f2329; color: #fff;
+    padding: 10px 22px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 99; }
+  .toast.show { opacity: .92; }
+  .empty { color: var(--muted); text-align: center; padding: 30px 0; }
+  table.stat { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.stat th, table.stat td { border-bottom: 1px solid var(--border); padding: 9px 10px; text-align: center; }
+  table.stat th { color: var(--muted); font-weight: 600; background: #f8f9fb; }
+  table.stat td:first-child, table.stat th:first-child { text-align: left; }
+  .diff-same { color: var(--ok); font-weight: 600; } .diff-near { color: var(--warn); font-weight: 600; } .diff-far { color: var(--err); font-weight: 600; }
+  .kpis { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .kpi { flex: 1; min-width: 150px; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 14px 18px; box-shadow: var(--shadow); }
+  .kpi .v { font-size: 22px; font-weight: 700; } .kpi .k { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .addr { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--border); flex-wrap: wrap; }
+  .addr:last-child { border-bottom: none; }
+  .addr .lab { width: 110px; flex: none; color: var(--muted); font-size: 13px; }
+  .addr code { background: #f4f6fa; border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 10px; font-size: 13px; color: var(--text); user-select: all; }
+  .addr .open { color: var(--primary); text-decoration: none; font-size: 13px; }
+
+  /* ---------- 登录 ---------- */
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(120% 120% at 50% 0%, #eaf0ff 0%, var(--bg) 60%); padding: 24px; }
+  .login-card { width: 100%; max-width: 380px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; box-shadow: 0 12px 32px rgba(16,24,40,.10); padding: 30px 28px 26px; }
+  .login-card .brand { display: flex; align-items: center; gap: 9px; font-size: 19px; font-weight: 700; }
+  .login-card .brand .dot { width: 11px; height: 11px; border-radius: 3px; background: var(--primary); }
+  .login-card .sub { color: var(--muted); font-size: 13px; margin: 8px 0 22px; line-height: 1.7; }
+  .login-card label { margin: 0 0 6px; }
+  .login-card .fld { margin-bottom: 14px; }
+  .login-card .btn { width: 100%; padding: 11px; font-size: 15px; margin-top: 6px; }
+  .login-err { background: var(--err-bg); color: var(--err); border-radius: 8px; padding: 9px 12px;
+    font-size: 13px; margin-bottom: 12px; display: none; line-height: 1.6; }
+  .login-tip { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border);
+    font-size: 12px; color: var(--muted); line-height: 1.9; }
+  .login-tip b { color: var(--text); }
+  .user-box { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
+  .user-box .who { white-space: nowrap; }
+  .user-box .who b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+<!-- ================= 登录 ================= -->
+<div class="login-wrap" id="loginScreen">
+  <div class="login-card">
+    <div class="brand"><span class="dot"></span>AI 判分系统</div>
+    <div class="sub" id="loginSub">请使用老师或学生账号登录</div>
+    <div class="login-err" id="loginErr"></div>
+    <div class="fld">
+      <label><b>账号</b></label>
+      <input type="text" id="loginAcc" inputmode="numeric" maxlength="5" autocomplete="username" placeholder="请输入 5 位账号">
+    </div>
+    <div class="fld">
+      <label><b>密码</b></label>
+      <input type="password" id="loginPwd" maxlength="5" autocomplete="current-password" placeholder="请输入密码">
+    </div>
+    <button class="btn" id="btnLogin">登录</button>
+    <div class="login-tip">
+      <b>教师账号</b>：00000 – 00005 &nbsp;·&nbsp; 可出题、判分与确认<br>
+      <b>学生账号</b>：26006 – 26200 &nbsp;·&nbsp; 仅可进入学生端提交答案<br>
+      初始密码与账号相同，登录后请勿转告他人。
+    </div>
+  </div>
+</div>
+
+<header id="appHeader" style="display:none">
+  <div class="logo"><span class="dot"></span>AI 判分系统</div>
+  <nav>
+    <button data-tab="teacher" class="active">出题</button>
+    <button data-tab="grade">判分与确认</button>
+    <button data-tab="student">学生端</button>
+    <button data-tab="stats">判分对比</button>
+    <button data-tab="settings">设置</button>
+  </nav>
+  <div class="user-box" id="userBox" style="display:none">
+    <span class="who" id="userWho"></span>
+    <button class="btn ghost sm" id="btnLogout">退出</button>
+  </div>
+  <div class="llm-badge" id="llmBadge"></div>
+</header>
+<main id="appMain" style="display:none">
+  <div class="card" id="llmBanner" style="display:none;border-color:#f0c98b;background:#fff9ef"></div>
+  <!-- ================= 出题（老师端） ================= -->
+  <div id="tab-teacher">
+    <div class="card">
+      <h2>出题 <span class="hint">写好题目与评分标准，学生提交后 AI 自动按标准判分</span></h2>
+      <label><b>题目标题</b></label>
+      <input type="text" id="qTitle" placeholder="例如：议论文片段 · 手机对中学生的影响">
+      <label><b>题目内容</b></label>
+      <textarea id="qText" placeholder="把题目完整描述写在这里，包括对学生的要求（字数、要点等）"></textarea>
+      <label><b>评分标准</b>（每行一条，建议在条目后标注分值，例如：观点明确（2分））</label>
+      <textarea id="qRubric" placeholder="观点明确，立场清晰（2分）&#10;论据一：具体且切题（3分）&#10;..."></textarea>
+      <label><b>满分</b></label>
+      <input type="number" id="qMax" value="10" min="1" max="1000" style="width:140px">
+      <div class="mt"><button class="btn" id="btnPublish">发布题目</button></div>
+    </div>
+    <div class="card" id="recentCard" style="display:none">
+      <h2>我最近发布的题目 <span class="hint">只显示本账号发布的题目</span></h2>
+      <div id="recentList"></div>
+    </div>
+  </div>
+
+  <!-- ================= 判分与确认（老师端） ================= -->
+  <div id="tab-grade" style="display:none">
+    <div class="card">
+      <h2>① 选择题目 <span class="hint">只显示本账号发布的题目；其他教师的题目和判分对你不开放</span></h2>
+      <div id="qList"></div>
+    </div>
+
+    <div class="card">
+      <h2>② 判分与确认 <span class="hint">查看 AI 分数和理由，可改分后确认，确认后即为最终成绩</span></h2>
+      <div id="subList"></div>
+    </div>
+  </div>
+
+  <!-- ================= 学生端 ================= -->
+  <div id="tab-student" style="display:none">
+    <div class="card">
+      <h2>提交答案 <span class="hint" id="studentHint"></span></h2>
+      <label><b>① 选择教师</b></label>
+      <select id="sTeacher"></select>
+      <label><b>② 选择该教师发布的题目</b></label>
+      <select id="sQ"></select>
+      <label><b>你的账号 / 姓名</b></label>
+      <input type="text" id="sName" placeholder="例如：26006" readonly>
+      <label><b>你的答案</b></label>
+      <textarea id="sAns" style="min-height:160px" placeholder="在此输入答案……提交后 AI 会立即按老师设置的评分标准判分"></textarea>
+      <div class="mt"><button class="btn" id="btnSubmit">提交答案</button></div>
+    </div>
+    <div class="card" id="sResult" style="display:none"></div>
+    <div class="card" id="mySubsCard" style="display:none">
+      <h2>我的提交记录 <span class="hint">只显示你自己的答案与成绩；先选教师（00000–00005 都可选），只看该教师给出的成绩</span></h2>
+      <label id="myTeacherWrap"><b>① 选择教师</b></label>
+      <select id="myTeacher"></select>
+      <div id="mySubs" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- ================= 判分对比 ================= -->
+  <div id="tab-stats" style="display:none">
+    <div class="kpis" id="kpis"></div>
+    <div class="card">
+      <h2>AI 判分 vs 老师确认分 <span class="hint">仅统计本账号题目下已确认的提交；差值 = AI分 − 老师分</span></h2>
+      <div id="statBody"></div>
+    </div>
+  </div>
+
+  <!-- ================= 设置 ================= -->
+  <div id="tab-settings" style="display:none">
+    <div class="card" id="cloudCard" style="display:none">
+      <h2>云服务 <span class="hint">题目、提交和判分结果都存在云端，任何设备打开都是同一份数据</span></h2>
+      <div id="cloudBox">加载中…</div>
+      <label><b>判分使用的云端模型</b>（免 API Key，由云服务统一提供）</label>
+      <select id="cloudModelSel"></select>
+      <div style="margin-top:14px;font-size:13px;color:var(--muted);line-height:1.9">
+        · 数据表：<code>questions</code>（题目与评分标准）、<code>submissions</code>（提交、AI 判分、老师终评）<br>
+        · 账号隔离：每个教师账号只能看到并操作自己发布的题目及其判分记录，教师账号之间互不可见；学生只能看到自己的提交<br>
+        · 数据库当前为「应用内公开读写」策略，隔离由应用层按账号校验（服务端与页面双重拦截）。请不要把链接公开传播。
+      </div>
+    </div>
+    <div class="card">
+      <h2>其他电脑访问 <span class="hint">同一局域网内的电脑或手机，用下面的地址打开即可</span></h2>
+      <div id="accessBox">加载中…</div>
+      <div id="accessTips" style="margin-top:14px;font-size:13px;color:var(--muted);line-height:1.9"></div>
+    </div>
+    <div class="card" id="aiSetCard">
+      <h2>AI 服务设置 <span class="hint">换到其他电脑后，在这里填入任意 OpenAI 兼容接口即可使用</span></h2>
+      <div class="summary-box" id="setCurrent">加载中…</div>
+      <label><b>快速选择服务商</b>（选择后自动填入地址和模型，再补上你自己的 API Key）</label>
+      <select id="presetSel"></select>
+      <div id="presetNote" class="m" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+      <label><b>服务地址 Base URL</b></label>
+      <input type="text" id="setBase" placeholder="例如 https://api.deepseek.com/v1">
+      <label><b>API Key</b></label>
+      <input type="text" id="setKey" placeholder="留空表示不修改已保存的 Key；本地 Ollama 可随意填">
+      <label><b>模型名称</b></label>
+      <input type="text" id="setModel" placeholder="例如 deepseek-chat">
+      <label><b>请求方式</b></label>
+      <select id="setStream">
+        <option value="1">流式（推荐，绝大多数服务支持）</option>
+        <option value="0">非流式（个别私有部署/代理不支持流式时选这个）</option>
+      </select>
+      <div class="mt">
+        <button class="btn" id="btnSaveSet">保存设置</button>
+        <button class="btn ghost" id="btnTestSet">测试连接</button>
+        <button class="btn ghost" id="btnClearSet">恢复自动检测</button>
+      </div>
+      <div class="summary-box" id="setTestOut" style="display:none;margin-top:14px"></div>
+      <div style="margin-top:18px;font-size:13px;color:var(--muted);line-height:1.9">
+        说明：<br>
+        · 设置保存在本机 <code>data/settings.json</code>，不会上传到任何地方。<br>
+        · 除了在这里填写，也可以用环境变量启动：<code>AI_BASE_URL</code> / <code>AI_API_KEY</code> / <code>AI_MODEL</code>。<br>
+        · 完全不想申请 Key，可以本机装 <b>Ollama</b> 后选上面的「本地 Ollama」，无需联网。
+      </div>
+    </div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script src="cloud-config.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+let state = { questions: [], submissions: [], llmConfigured: false };
+let selQ = null; let lastSubId = null;
+
+// ================= 账号与登录 =================
+// 账号规则：教师 00000–00005，学生 26006–26200；每个账号的初始密码与账号相同。
+// 说明：账号表与校验都在前端完成，属于「页面权限隔离」，不是服务端鉴权。
+const AUTH = {
+  teacher: { from: 0, to: 5 },
+  student: { from: 26006, to: 26200 },
+};
+const SESSION_KEY = 'grader.session';
+const SESSION_TTL = 12 * 3600 * 1000; // 12 小时内免重复登录
+
+let session = null;
+
+function roleOf(acc) {
+  if (!/^\d{5}$/.test(acc)) return null;
+  const n = Number(acc);
+  if (n >= AUTH.teacher.from && n <= AUTH.teacher.to) return 'teacher';
+  if (n >= AUTH.student.from && n <= AUTH.student.to) return 'student';
+  return null;
+}
+
+/** 校验账号密码，返回 session；失败抛错给登录框显示 */
+function checkLogin(acc, pwd) {
+  const a = String(acc || '').trim();
+  const p = String(pwd || '').trim();
+  if (!a || !p) throw new Error('请输入账号和密码');
+  const role = roleOf(a);
+  if (!role) throw new Error('账号不存在（教师 00000–00005，学生 26006–26200）');
+  if (p !== a) throw new Error('密码错误');
+  return { account: a, role, name: role === 'teacher' ? '教师 ' + a : '学生 ' + a, ts: Date.now() };
+}
+
+function readSession() {
+  try {
+    const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    if (!s || !s.account || !s.ts) return null;
+    if (Date.now() - s.ts > SESSION_TTL) return null;
+    const role = roleOf(s.account);
+    if (!role || role !== s.role) return null;
+    return s;
+  } catch (_) { return null; }
+}
+function saveSession(s) { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (_) {} }
+function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch (_) {} }
+
+const isTeacher = () => !!session && session.role === 'teacher';
+
+/** 按角色控制可见页签，并给登录信息赋值 */
+function applyRole() {
+  const allow = isTeacher() ? ['teacher', 'grade', 'stats', 'settings'] : ['student'];
+  document.querySelectorAll('nav button').forEach(b => {
+    b.style.display = allow.includes(b.dataset.tab) ? '' : 'none';
+  });
+  $('#userBox').style.display = '';
+  $('#userWho').innerHTML = '<b>' + esc(session.account) + '</b> · ' + (isTeacher() ? '教师' : '学生');
+  if (!isTeacher()) {
+    $('#sName').value = session.account;
+    $('#sName').readOnly = true;
+    $('#studentHint').textContent = '当前登录账号 ' + session.account + '，提交后成绩记在该账号下';
+  }
+}
+
+function switchTab(tab) {
+  const btn = document.querySelector('nav button[data-tab="' + tab + '"]');
+  if (btn && btn.style.display !== 'none') btn.click();
+}
+
+function showLogin() {
+  $('#loginScreen').style.display = '';
+  $('#appHeader').style.display = 'none';
+  $('#appMain').style.display = 'none';
+  setTimeout(() => { const el = $('#loginAcc'); if (el) el.focus(); }, 50);
+}
+
+async function enterApp(s) {
+  session = s;
+  applyRole();
+  $('#loginScreen').style.display = 'none';
+  $('#appHeader').style.display = '';
+  $('#appMain').style.display = '';
+  switchTab(isTeacher() ? 'teacher' : 'student');
+  await bootData();
+}
+
+$('#btnLogin').onclick = doLogin;
+$('#loginPwd').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+$('#loginAcc').addEventListener('keydown', e => { if (e.key === 'Enter') $('#loginPwd').focus(); });
+
+async function doLogin() {
+  const err = $('#loginErr');
+  err.style.display = 'none';
+  const btn = $('#btnLogin');
+  btn.disabled = true; btn.textContent = '登录中…';
+  try {
+    const s = checkLogin($('#loginAcc').value, $('#loginPwd').value);
+    saveSession(s);
+    await enterApp(s);
+    $('#loginPwd').value = '';
+  } catch (e) {
+    err.textContent = e.message;
+    err.style.display = '';
+  }
+  btn.disabled = false; btn.textContent = '登录';
+}
+
+$('#btnLogout').onclick = () => {
+  if (!confirm('退出登录？')) return;
+  clearSession();
+  session = null;
+  state = { questions: [], submissions: [], llmConfigured: false };
+  location.reload();
+};
+
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+function fmtTime(iso) { return new Date(iso).toLocaleString('zh-CN', { hour12: false }); }
+function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+function fmtSec(ms) { return ms == null ? '—' : (ms / 1000).toFixed(1) + ' 秒'; }
+
+async function api(path, opts) {
+  const headers = { 'Content-Type': 'application/json' };
+  // 服务端按账号判断题目/判分归属，必须带上当前登录账号
+  if (session && session.account) headers['X-Account'] = session.account;
+  const res = await fetch(path, Object.assign({ headers }, opts || {}));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  return data;
+}
+
+// ================= 云服务（云数据库 + 云端 AI 判分） =================
+// 云端模式：云服务 SDK 直连云数据库与云端模型（免 API Key）
+// 本机模式：本机/局域网访问时云服务按域名授权不可用，自动走 /api/*（data/db.json）
+const Cloud = { ready: false, client: null, error: '', models: [], model: '' };
+
+function loadSdk() {
+  return new Promise(resolve => {
+    if (window.WorkBuddyCloud) return resolve(true);
+    if (!window.CLOUD_SDK_URL) return resolve(false);
+    const s = document.createElement('script');
+    s.src = window.CLOUD_SDK_URL;
+    s.async = true;
+    s.onload = () => resolve(!!window.WorkBuddyCloud);
+    s.onerror = () => resolve(false);
+    document.head.appendChild(s);
+    setTimeout(() => resolve(!!window.WorkBuddyCloud), 12000);
+  });
+}
+
+async function initCloud() {
+  const cfg = window.CLOUD_PUBLIC_CONFIG;
+  if (!cfg || !cfg.endpoint || !cfg.publishableKey) return;
+  const ok = await loadSdk();
+  if (!ok) { Cloud.error = '云服务 SDK 加载失败（可能处于离线环境）'; return; }
+  try {
+    Cloud.client = window.WorkBuddyCloud.createWorkBuddyCloud({
+      endpoint: cfg.endpoint,
+      oauthRelayBaseUrl: cfg.oauthRelayBaseUrl,
+      publishableKey: cfg.publishableKey,
+    });
+    // 探一次真实请求：既能确认网络通，也能确认当前访问域名与云服务绑定一致
+    const probe = await Cloud.client.database.from('questions').select('id').limit(1);
+    if (probe.error) throw probe.error;
+    Cloud.ready = true;
+  } catch (e) {
+    Cloud.error = dbErr(e);
+    Cloud.ready = false;
+    Cloud.client = null;
+  }
+}
+
+function dbErr(e) {
+  const code = e && e.code;
+  if (code === '42P01') return '云数据库缺少数据表，请重新部署应用';
+  if (code === '42501') return '没有读写云端数据的权限（授权或 RLS 策略缺失）';
+  if (code === '23505') return '该数据已存在（唯一约束冲突）';
+  const msg = (e && e.message) || (e && e.error && e.error.message) || String(e);
+  if (/origin/i.test(msg)) return '当前访问地址与云服务绑定的域名不一致，请从应用正式地址打开';
+  return msg;
+}
+
+function llmErr(e) {
+  const code = String((e && e.error && e.error.code) || (e && e.code) || '');
+  const msg = (e && e.error && e.error.message) || (e && e.message) || String(e);
+  if (code.indexOf('quota_') === 0) return '云端模型额度不足或请求过于频繁，请稍后再试';
+  if (code.indexOf('auth_') === 0) return '云服务鉴权失败，请从应用正式地址打开页面';
+  if (code.indexOf('request_') === 0) return '请求不被模型接受：' + msg;
+  if (code.indexOf('gateway_') === 0 || code.indexOf('model_') === 0) return '模型服务暂时不可用，请稍后重试';
+  return msg;
+}
+
+function mapQ(r) {
+  return {
+    id: String(r.id), title: r.title, question: r.question, rubric: r.rubric,
+    maxScore: Number(r.max_score), createdAt: r.created_at,
+    owner: r.owner_account || '00000',   // 出题教师，历史数据默认归 00000
+  };
+}
+function mapSub(r) {
+  return {
+    id: String(r.id), dbId: r.id, questionId: String(r.question_id),
+    studentName: r.student_name, answer: r.answer, status: r.status, aiStatus: r.ai_status,
+    aiScore: r.ai_score == null ? null : Number(r.ai_score),
+    aiBreakdown: Array.isArray(r.ai_breakdown) ? r.ai_breakdown : [],
+    aiSummary: r.ai_summary || '', aiDurationMs: r.ai_duration_ms, aiModel: r.ai_model,
+    aiError: r.ai_error || null,
+    teacherScore: r.teacher_score == null ? null : Number(r.teacher_score),
+    teacherComment: r.teacher_comment || '', createdAt: r.created_at, confirmedAt: r.confirmed_at,
+    account: r.account || '', owner: r.owner_account || '00000',
+  };
+}
+
+/** 取一个可用的云端模型（沿用上次选择，否则优先用轻量快速模型） */
+const PREFERRED_MODELS = ['deepseek-v4-flash', 'glm-5.3-flash', 'space-bunny'];
+async function ensureModel() {
+  if (Cloud.model) return Cloud.model;
+  const list = await Cloud.client.llm.models.list();
+  const usable = (list || []).filter(m => m.disabled !== true && m.enabled !== false);
+  if (!usable.length) throw new Error('云端暂无可用模型，请联系管理员');
+  const saved = localStorage.getItem('grader.model');
+  // 判分是短文本结构化任务，默认用轻量模型：auto 这类推理模型要 1~2 分钟，太慢
+  const pick = usable.find(m => m.id === saved)
+    || PREFERRED_MODELS.map(id => usable.find(m => m.id === id)).find(Boolean)
+    || usable[0];
+  Cloud.models = usable;
+  Cloud.model = pick.id;
+  return Cloud.model;
+}
+
+function buildGradePrompt(q, answer) {
+  return [
+    '你是一名严谨、公正的阅卷老师，正在批改学生提交的主观题答案。',
+    '你必须严格依据给定的评分标准逐条评分：有则给分、无则扣分，理由要引用学生答案中的具体内容作为证据，不得凭印象打分。',
+    '',
+    '# 题目',
+    q.question,
+    '',
+    '# 评分标准（满分 ' + q.maxScore + ' 分）',
+    String(q.rubric || '').trim(),
+    '',
+    '# 学生答案',
+    answer,
+    '',
+    '# 输出要求',
+    '只输出一个 JSON 对象，不要输出任何解释文字，不要使用 markdown 代码块。格式：',
+    '{"total": 总分数字, "breakdown": [{"criterion": "评分标准条目", "score": 该条得分, "max": 该条满分, "comment": "该条评分理由，须引用答案原文作为依据"}], "summary": "总体评价 2~3 句：先说优点，再说主要失分点"}',
+    '要求：breakdown 必须覆盖评分标准的每一条；total 等于 breakdown 各条得分之和；总分不得超过 ' + q.maxScore + '，可以为小数（精确到 0.5）。',
+  ].join('\n');
+}
+
+function extractJson(text) {
+  let t = String(text).trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) t = fence[1].trim();
+  const s = t.indexOf('{'), e = t.lastIndexOf('}');
+  if (s >= 0 && e > s) t = t.slice(s, e + 1);
+  return JSON.parse(t);
+}
+
+/** 调用云端模型判分（云端模型只支持流式） */
+async function cloudGrade(q, answer) {
+  const model = await ensureModel();
+  const t0 = performance.now();
+  let content = '';
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 180000);
+  try {
+    for await (const chunk of Cloud.client.llm.chat.completions.create({
+      model,
+      messages: [
+        { role: 'system', content: '你是一名严格依据评分标准阅卷的老师，只输出 JSON。' },
+        { role: 'user', content: buildGradePrompt(q, answer) },
+      ],
+      stream: true,
+      signal: ctrl.signal,
+    })) {
+      const d = chunk.choices && chunk.choices[0] && chunk.choices[0].delta;
+      if (d && typeof d.content === 'string') content += d.content;
+    }
+  } finally { clearTimeout(timer); }
+  const durationMs = Math.round(performance.now() - t0);
+  if (!content.trim()) throw new Error('云端模型返回内容为空');
+  let parsed;
+  try { parsed = extractJson(content); }
+  catch (_) { throw new Error('AI 返回内容无法解析为评分 JSON：' + content.slice(0, 160)); }
+  const max = Number(q.maxScore) || 100;
+  let total = Number(parsed.total);
+  if (!isFinite(total)) throw new Error('AI 返回的 total 不是数字');
+  total = Math.min(max, Math.max(0, Math.round(total * 2) / 2));
+  const breakdown = Array.isArray(parsed.breakdown) ? parsed.breakdown.map(b => ({
+    criterion: String(b.criterion || ''), score: Number(b.score) || 0,
+    max: Number(b.max) || 0, comment: String(b.comment || ''),
+  })) : [];
+  return { score: total, breakdown, summary: String(parsed.summary || ''), durationMs, model };
+}
+
+/** 判分并写回云端；判分失败时把失败原因落库，不影响这次提交本身 */
+async function gradeAndStore(sub, q, opts) {
+  const keepConfirmed = (opts && opts.keepConfirmed) || sub.status === 'confirmed';
+  try {
+    const g = await cloudGrade(q, sub.answer);
+    const patch = {
+      ai_status: 'done', ai_score: g.score, ai_breakdown: g.breakdown, ai_summary: g.summary,
+      ai_duration_ms: g.durationMs, ai_model: g.model, ai_error: null,
+      status: keepConfirmed ? 'confirmed' : 'ai_graded',
+    };
+    const { data, error } = await Cloud.client.database.from('submissions')
+      .update(patch).eq('id', sub.dbId).select().single();
+    if (error) throw error;
+    return { submission: mapSub(data) };
+  } catch (e) {
+    const errMsg = llmErr(e);
+    try {
+      await Cloud.client.database.from('submissions')
+        .update({ ai_status: 'failed', ai_error: errMsg }).eq('id', sub.dbId);
+    } catch (_) { /* 落库失败也不阻断页面反馈 */ }
+    return { submission: Object.assign({}, sub, { aiStatus: 'failed', aiError: errMsg }) };
+  }
+}
+
+/**
+ * 数据访问：云端优先，本机接口兜底
+ * 教师之间彼此隔离：教师只加载「自己出的题目」和「这些题目下的判分记录」，
+ * 学生可看到全部题目（用于作答），但只看得到自己的提交。
+ */
+const store = {
+  async loadState() {
+    if (Cloud.ready) {
+      const [qs, subs] = await Promise.all([
+        Cloud.client.database.from('questions').select('*').order('created_at', { ascending: false }),
+        Cloud.client.database.from('submissions').select('*').order('created_at', { ascending: false }),
+      ]);
+      if (qs.error) throw new Error(dbErr(qs.error));
+      if (subs.error) throw new Error(dbErr(subs.error));
+      let model = '';
+      try { model = await ensureModel(); } catch (e) { Cloud.error = llmErr(e); }
+      let questions = (qs.data || []).map(mapQ);
+      let rows = (subs.data || []).map(mapSub);
+      if (isTeacher()) {
+        questions = questions.filter(q => q.owner === session.account);
+        const mine = new Set(questions.map(q => q.id));
+        rows = rows.filter(s => mine.has(s.questionId));
+      } else {
+        rows = rows.filter(s => s.account ? s.account === session.account : s.studentName === session.account);
+      }
+      return {
+        questions,
+        submissions: rows,
+        llmConfigured: !!model, llmModel: model, llmLabel: '云端 AI', cloud: true,
+      };
+    }
+    const local = await api('/api/state');
+    (local.questions || []).forEach(q => { if (!q.owner) q.owner = q.ownerAccount || '00000'; });
+    if (!isTeacher()) local.submissions = (local.submissions || [])
+      .filter(s => s.account ? s.account === session.account : s.studentName === session.account);
+    return local;
+  },
+
+  async createQuestion(payload) {
+    if (!Cloud.ready) return await api('/api/questions', { method: 'POST', body: JSON.stringify(payload) });
+    const { data, error } = await Cloud.client.database.from('questions')
+      .insert({
+        title: payload.title, question: payload.question, rubric: payload.rubric,
+        max_score: payload.maxScore,
+        owner_account: session.account,     // 记录出题教师
+      })
+      .select().single();
+    if (error) throw new Error(dbErr(error));
+    return { question: mapQ(data) };
+  },
+
+  async deleteQuestion(id) {
+    // 只能删自己的题目（列表里也只有自己的，这里再兜一层）
+    const q = state.questions.find(x => x.id === String(id));
+    if (!q) throw new Error('该题目不属于当前账号，无法删除');
+    if (q.owner !== session.account) throw new Error('这是其他教师发布的题目，你无权删除');
+    if (!Cloud.ready) return await api('/api/questions/' + id, { method: 'DELETE' });
+    const { data, error } = await Cloud.client.database.from('questions')
+      .delete().eq('id', Number(id)).select();
+    if (error) throw new Error(dbErr(error));
+    if (!data || !data.length) throw new Error('没有删除到任何数据（题目不存在或没有权限）');
+    return { removed: data.length };
+  },
+
+  async createSubmission(payload) {
+    if (!Cloud.ready) return await api('/api/submissions', { method: 'POST', body: JSON.stringify(payload) });
+    const q = state.questions.find(x => x.id === String(payload.questionId));
+    if (!q) throw new Error('题目不存在');
+    const { data, error } = await Cloud.client.database.from('submissions')
+      .insert({
+        question_id: Number(payload.questionId),
+        student_name: payload.studentName || '匿名学生',
+        account: session.account,
+        answer: payload.answer,
+        status: 'pending', ai_status: 'grading',
+      }).select().single();
+    if (error) throw new Error(dbErr(error));
+    return await gradeAndStore(mapSub(data), q);
+  },
+
+  /** 判分记录必须属于当前教师的题目 */
+  _ownSub(id) {
+    const sub = state.submissions.find(s => s.id === String(id));
+    if (!sub) throw new Error('该提交不属于当前账号，无法操作');
+    const q = state.questions.find(x => x.id === sub.questionId);
+    if (q && q.owner !== session.account) throw new Error('这是其他教师题目下的提交，你无权操作');
+    return sub;
+  },
+
+  async regrade(id) {
+    const sub = this._ownSub(id);
+    if (!Cloud.ready) return await api('/api/submissions/' + id + '/grade', { method: 'POST', body: '{}' });
+    const q = state.questions.find(x => x.id === sub.questionId);
+    if (!q) throw new Error('对应题目已被删除');
+    await Cloud.client.database.from('submissions')
+      .update({ ai_status: 'grading' }).eq('id', sub.dbId);
+    return await gradeAndStore(sub, q, { keepConfirmed: sub.status === 'confirmed' });
+  },
+
+  async confirm(id, payload) {
+    const sub = this._ownSub(id);
+    if (!Cloud.ready) return await api('/api/submissions/' + id + '/confirm', { method: 'POST', body: JSON.stringify(payload) });
+    const q = state.questions.find(x => x.id === sub.questionId);
+    const max = q ? q.maxScore : 100;
+    let score = Number(payload.teacherScore);
+    if (!isFinite(score)) throw new Error('分数必须是数字');
+    score = Math.min(max, Math.max(0, Math.round(score * 2) / 2));
+    const { data, error } = await Cloud.client.database.from('submissions').update({
+      teacher_score: score,
+      teacher_comment: String(payload.teacherComment || '').trim(),
+      status: 'confirmed',
+      confirmed_at: new Date().toISOString(),
+    }).eq('id', sub.dbId).select();
+    if (error) throw new Error(dbErr(error));
+    if (!data || !data.length) throw new Error('没有更新到任何数据（可能没有权限）');
+    return { submission: mapSub(data[0]) };
+  },
+};
+
+// ---------- 导航 ----------
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  ['teacher', 'grade', 'student', 'stats', 'settings'].forEach(t => $('#tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
+  if (b.dataset.tab === 'stats') renderStats();
+  if (b.dataset.tab === 'settings') { loadAccess(); loadSettings(); }
+});
+
+// ---------- 数据加载 ----------
+async function refresh() {
+  state = await store.loadState();
+  if (Cloud.ready) {
+    $('#llmBadge').innerHTML = state.llmConfigured
+      ? '<span class="st on"></span>云服务已连接 · ' + esc(state.llmModel || '云端 AI')
+      : '<span class="st on"></span>云服务已连接 · 暂无可用模型';
+  } else {
+    $('#llmBadge').innerHTML = state.llmConfigured
+      ? '<span class="st on"></span>AI 已连接 · ' + esc(state.llmModel || '')
+      : '<span class="st off"></span>AI 未配置（点右上角「设置」）';
+  }
+  const banner = $('#llmBanner');
+  if (!state.llmConfigured) {
+    banner.style.display = '';
+    banner.innerHTML = Cloud.ready
+      ? '<b>云端暂无可用模型</b>，现在提交答案无法判分。' + esc(Cloud.error || '')
+      : '<b>尚未配置 AI 服务</b>，现在提交答案无法判分。' +
+        '<button class="btn sm" style="margin-left:12px" id="goSetBtn">去设置</button>';
+    if (!Cloud.ready) $('#goSetBtn').onclick = () => document.querySelector('nav button[data-tab="settings"]').click();
+  } else {
+    banner.style.display = 'none';
+  }
+  renderQuestions(); renderSubs(); renderStudentSelect(); renderRecent(); renderMySubs();
+}
+
+/** 学生端：只渲染当前账号自己的提交；先选教师，只看该教师给出的成绩 */
+function renderMySubs() {
+  const card = $('#mySubsCard');
+  if (isTeacher()) { card.style.display = 'none'; return; }
+  const mine = state.submissions.filter(s => s.account ? s.account === session.account : s.studentName === session.account);
+  card.style.display = '';
+
+  // 教师下拉固定列出全部 6 位教师（00000–00005），没有提交的显示「暂无提交」
+  const ownerOfSub = s => {
+    const q = state.questions.find(x => x.id === s.questionId);
+    return q ? (q.owner || '00000') : '__deleted';
+  };
+  const groups = new Map();
+  mine.forEach(s => {
+    const o = ownerOfSub(s);
+    groups.set(o, (groups.get(o) || 0) + 1);
+  });
+  const keys = teacherAccounts();
+  // 兜底：出现不在规则内的出题账号时也列出来
+  [...groups.keys()].forEach(k => { if (k !== '__deleted' && !keys.includes(k)) keys.push(String(k)); });
+  if (groups.has('__deleted')) keys.push('__deleted');
+
+  const sel = $('#myTeacher');
+  $('#myTeacherWrap').style.display = '';
+  sel.style.display = '';
+  const prev = sel.value;
+  sel.innerHTML = keys.map(k => {
+    const n = groups.get(k) || 0;
+    const label = k === '__deleted' ? '其他（题目已删除）' : '教师 ' + esc(k);
+    return `<option value="${esc(k)}">${label}（${n ? n + ' 条' : '暂无提交'}）</option>`;
+  }).join('');
+  if (prev && keys.includes(prev)) sel.value = prev;
+  else sel.value = keys[0];
+
+  if (!mine.length) {
+    $('#mySubs').innerHTML = '<div class="empty">你还没有提交过答案，先在上面选一道题作答吧</div>';
+    return;
+  }
+  const owner = sel.value;
+  const subs = mine.filter(s => ownerOfSub(s) === owner);
+  if (!subs.length) { $('#mySubs').innerHTML = '<div class="empty">教师 ' + esc(owner) + ' 名下还没有你的提交</div>'; return; }
+  $('#mySubs').innerHTML = subs.map(s => {
+    const q = state.questions.find(x => x.id === s.questionId);
+    const badge = s.status === 'confirmed' ? '<span class="badge ok">老师已确认</span>'
+      : (s.aiStatus === 'failed' ? '<span class="badge err">AI 判分失败</span>' : '<span class="badge wait">待老师确认</span>');
+    const body = s.status === 'confirmed' && s.teacherComment
+      ? `<div class="summary-box"><b>老师评语：</b>${esc(s.teacherComment)}</div>`
+      : (s.aiSummary ? `<div class="summary-box"><b>AI 总评：</b>${esc(s.aiSummary)}</div>` : '');
+    return `<div class="sub"><div class="sub-head">
+      <span class="name">${esc(q ? q.title : '题目已被删除')}</span>${badge}
+      <span class="time">${fmtTime(s.createdAt)}</span>
+      ${s.aiScore != null ? `<span class="score-big">AI ${s.aiScore}<small> / ${q ? q.maxScore : ''}</small></span>` : ''}
+      ${s.status === 'confirmed' ? `<span class="score-big teacher">终评 ${s.teacherScore}</span>` : ''}
+    </div><div class="sub-body">
+      <details><summary>查看我的答案</summary><div class="ans">${esc(s.answer)}</div></details>
+      ${body}
+    </div></div>`;
+  }).join('');
+}
+$('#myTeacher').addEventListener('change', renderMySubs);
+
+// ---------- 老师端：出题 ----------
+function renderRecent() {
+  const card = $('#recentCard');
+  if (!state.questions.length) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  $('#recentList').innerHTML = state.questions.slice(0, 5).map(q => {
+    const n = state.submissions.filter(s => s.questionId === q.id).length;
+    return `<div class="q-item" data-id="${q.id}">
+      <div><div class="t">${esc(q.title)}</div><div class="m">满分 ${q.maxScore} 分 · ${n} 份提交 · ${fmtTime(q.createdAt)}</div></div>
+      <button class="btn sm" style="margin-left:auto" data-go="${q.id}">去判分</button></div>`;
+  }).join('');
+  $('#recentList').querySelectorAll('[data-go]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    selQ = b.dataset.go;
+    document.querySelector('nav button[data-tab="grade"]').click();
+  });
+}
+
+$('#btnPublish').onclick = async () => {
+  const title = $('#qTitle').value.trim(), question = $('#qText').value.trim(),
+        rubric = $('#qRubric').value.trim(), maxScore = Number($('#qMax').value) || 10;
+  if (!title || !question || !rubric) return toast('标题、题目内容、评分标准都不能为空');
+  try {
+    await store.createQuestion({ title, question, rubric, maxScore });
+    $('#qTitle').value = ''; $('#qText').value = ''; $('#qRubric').value = ''; $('#qMax').value = '10';
+    toast('题目已发布'); refresh();
+  } catch (e) { toast(e.message); }
+};
+
+function renderQuestions() {
+  const box = $('#qList');
+  if (!state.questions.length) {
+    box.innerHTML = '<div class="empty">本账号还没有发布过题目，先在上方发布一道题（其他教师发布的题目不会显示在这里）</div>';
+    return;
+  }
+  box.innerHTML = state.questions.map(q => {
+    const n = state.submissions.filter(s => s.questionId === q.id).length;
+    return `<div class="q-item ${selQ === q.id ? 'sel' : ''}" data-id="${q.id}">
+      <div><div class="t">${esc(q.title)}</div><div class="m">满分 ${q.maxScore} 分 · ${n} 份提交</div></div>
+      <button class="btn ghost sm" style="margin-left:auto" data-del="${q.id}">删除</button></div>`;
+  }).join('');
+  box.querySelectorAll('.q-item').forEach(el => el.onclick = e => {
+    if (e.target.dataset.del) return;
+    selQ = el.dataset.id; renderQuestions(); renderSubs();
+  });
+  box.querySelectorAll('[data-del]').forEach(btn => btn.onclick = async e => {
+    e.stopPropagation();
+    if (!confirm('删除该题目及其全部提交？')) return;
+    try {
+      await store.deleteQuestion(btn.dataset.del);
+      if (selQ === btn.dataset.del) selQ = null;
+      toast('已删除'); refresh();
+    } catch (err) { toast(err.message); }
+  });
+  if (!selQ && state.questions.length) selQ = state.questions[0].id;
+}
+
+// ---------- 老师端：判分与确认 ----------
+function breakdownTable(brk) {
+  if (!brk || !brk.length) return '';
+  return `<table class="brk"><tr><th style="width:26%">评分标准条目</th><th style="width:12%">得分</th><th>评分理由</th></tr>` +
+    brk.map(b => `<tr><td>${esc(b.criterion)}</td><td class="sc">${b.score} / ${b.max}</td><td>${esc(b.comment)}</td></tr>`).join('') + '</table>';
+}
+
+function renderSubs() {
+  const box = $('#subList');
+  const q = state.questions.find(x => x.id === selQ);
+  if (!q) { box.innerHTML = '<div class="empty">请先在上方选择一道题目</div>'; return; }
+  const subs = state.submissions.filter(s => s.questionId === selQ);
+  if (!subs.length) { box.innerHTML = '<div class="empty">该题目还没有提交，切到「学生端」试试</div>'; return; }
+  box.innerHTML = subs.map(s => {
+    const stBadge = s.status === 'confirmed'
+      ? '<span class="badge ok">老师已确认</span>'
+      : (s.aiStatus === 'failed' ? '<span class="badge err">AI 判分失败</span>' : '<span class="badge wait">待老师确认</span>');
+    const aiPart = s.aiStatus === 'failed'
+      ? `<div class="summary-box" style="background:var(--err-bg)">AI 判分失败：${esc(s.aiError)}</div>`
+      : (s.aiScore == null ? '<div class="summary-box">AI 正在判分…</div>' :
+        `<div class="summary-box"><b>AI 总评：</b>${esc(s.aiSummary)}</div>${breakdownTable(s.aiBreakdown)}
+         <div style="margin-top:8px;font-size:12px;color:var(--muted)">AI 判分用时 ${fmtSec(s.aiDurationMs)}${s.aiModel ? ' · 模型 ' + esc(s.aiModel) : ''}</div>`);
+    const cur = s.status === 'confirmed' ? s.teacherScore : (s.aiScore != null ? s.aiScore : '');
+    return `<div class="sub">
+      <div class="sub-head">
+        <span class="name">${esc(s.studentName)}</span>${stBadge}
+        <span class="time">${fmtTime(s.createdAt)}</span>
+        ${s.aiScore != null ? `<span class="score-big">AI ${s.aiScore}<small> / ${q.maxScore}</small></span>` : ''}
+        ${s.status === 'confirmed' ? `<span class="score-big teacher">终评 ${s.teacherScore}<small> / ${q.maxScore}</small></span>` : ''}
+      </div>
+      <div class="sub-body">
+        <details><summary>查看学生答案</summary><div class="ans">${esc(s.answer)}</div></details>
+        ${aiPart}
+        <div class="grade-row">
+          <div class="f score"><label style="margin:0 0 4px">老师评分（0-${q.maxScore}）</label>
+            <input type="number" step="0.5" min="0" max="${q.maxScore}" id="ts-${s.id}" value="${cur}"></div>
+          <div class="f cmt"><label style="margin:0 0 4px">老师评语（可选）</label>
+            <input type="text" id="tc-${s.id}" value="${esc(s.teacherComment || '')}" placeholder="例如：第二条论据不够具体，扣 1 分"></div>
+          <button class="btn" data-confirm="${s.id}">${s.status === 'confirmed' ? '更新确认' : '确认成绩'}</button>
+          <button class="btn ghost" data-regrade="${s.id}">重新 AI 判分</button>
+        </div>
+      </div></div>`;
+  }).join('');
+  box.querySelectorAll('[data-confirm]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.confirm;
+    const v = $('#ts-' + id).value;
+    try {
+      await store.confirm(id, { teacherScore: Number(v), teacherComment: $('#tc-' + id).value });
+      toast('成绩已确认'); refresh();
+    } catch (e) { toast(e.message); }
+  });
+  box.querySelectorAll('[data-regrade]').forEach(b => b.onclick = async () => {
+    const id = b.dataset.regrade;
+    b.disabled = true; b.innerHTML = '<span class="spin"></span> 判分中…';
+    try { await store.regrade(id); toast('AI 重新判分完成'); }
+    catch (e) { toast(e.message); }
+    refresh();
+  });
+}
+
+// ---------- 学生端 ----------
+/** 规则内的全部教师账号：00000–00005 */
+function teacherAccounts() {
+  const out = [];
+  for (let i = AUTH.teacher.from; i <= AUTH.teacher.to; i++) out.push(String(i).padStart(5, '0'));
+  return out;
+}
+
+/** 汇总当前有题目的教师：返回 [[账号, 题目数], ...] */
+function teacherList() {
+  const map = new Map();
+  state.questions.forEach(q => {
+    const o = q.owner || '00000';
+    map.set(o, (map.get(o) || 0) + 1);
+  });
+  return [...map.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+}
+
+/** 先选教师，再只列出该教师的题目 */
+function renderStudentSelect() {
+  const sel = $('#sTeacher');
+  const list = teacherList();
+  if (!list.length) {
+    sel.innerHTML = '<option value="">（暂无教师发布题目）</option>';
+    $('#sQ').innerHTML = '<option value="">（老师还没有发布题目）</option>';
+    return;
+  }
+  const prev = sel.value;
+  sel.innerHTML = list
+    .map(([acc, n]) => `<option value="${esc(acc)}">教师 ${esc(acc)}（${n} 道题）</option>`)
+    .join('');
+  if (prev && list.some(([acc]) => String(acc) === String(prev))) sel.value = prev;
+  renderStudentQuestions();
+}
+
+function renderStudentQuestions() {
+  const owner = $('#sTeacher').value;
+  const qs = state.questions.filter(q => (q.owner || '00000') === owner);
+  const prev = $('#sQ').value;
+  $('#sQ').innerHTML = qs.length
+    ? qs.map(q => `<option value="${q.id}">${esc(q.title)}（满分 ${q.maxScore}）</option>`).join('')
+    : '<option value="">（该教师还没有发布题目）</option>';
+  if (prev && qs.some(q => String(q.id) === String(prev))) $('#sQ').value = prev;
+}
+$('#sTeacher').addEventListener('change', renderStudentQuestions);
+$('#btnSubmit').onclick = async () => {
+  const questionId = $('#sQ').value;
+  const studentName = isTeacher() ? $('#sName').value.trim() : session.account;
+  const answer = $('#sAns').value.trim();
+  if (!questionId) return toast('没有可选题目');
+  if (!state.llmConfigured) {
+    if (!Cloud.ready) document.querySelector('nav button[data-tab="settings"]').click();
+    return toast(Cloud.ready ? '云端暂无可用模型，请联系管理员' : '尚未配置 AI 服务，请先到「设置」页填写');
+  }
+  if (!studentName) return toast('请填写姓名');
+  if (!answer) return toast('请填写答案');
+  const btn = $('#btnSubmit'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span> AI 正在判分，请稍候…';
+  const r = $('#sResult');
+  try {
+    const { submission: s } = await store.createSubmission({ questionId, studentName, answer });
+    lastSubId = s.id;
+    const q = state.questions.find(x => x.id === questionId);
+    r.style.display = '';
+    r.innerHTML = s.aiStatus === 'failed'
+      ? `<h2>提交成功，但 AI 判分失败</h2><div class="summary-box" style="background:var(--err-bg)">${esc(s.aiError)}</div>`
+      : `<h2>提交成功 · AI 初步判分 <span class="badge ${s.status === 'confirmed' ? 'ok' : 'wait'}">${s.status === 'confirmed' ? '老师已确认' : '等待老师确认，最终成绩以老师确认为准'}</span></h2>
+         <div class="score-big" style="margin:6px 0 2px">${s.aiScore}<small> / ${q ? q.maxScore : ''}</small></div>
+         <div class="summary-box"><b>AI 总评：</b>${esc(s.aiSummary)}</div>${breakdownTable(s.aiBreakdown)}`;
+    $('#sAns').value = '';
+    refresh();
+  } catch (e) { toast(e.message); }
+  btn.disabled = false; btn.textContent = '提交答案';
+};
+
+// ---------- 判分对比 ----------
+function diffClass(d) { d = Math.abs(d); return d <= 0.5 ? 'diff-same' : (d <= 1.5 ? 'diff-near' : 'diff-far'); }
+function renderStats() {
+  const confirmed = state.submissions.filter(s => s.status === 'confirmed' && s.aiScore != null);
+  const kpis = $('#kpis');
+  const graded = state.submissions.filter(s => s.aiScore != null);
+  const avg = a => a.length ? (a.reduce((x, y) => x + y, 0) / a.length) : null;
+  const avgAiMs = avg(graded.filter(s => s.aiDurationMs).map(s => s.aiDurationMs));
+  const diffs = confirmed.map(s => s.aiScore - s.teacherScore);
+  const avgDiff = avg(diffs.map(Math.abs));
+  kpis.innerHTML = `
+    <div class="kpi"><div class="v">${graded.length}</div><div class="k">AI 已判分（份）</div></div>
+    <div class="kpi"><div class="v">${avgAiMs ? (avgAiMs / 1000).toFixed(1) + ' 秒' : '—'}</div><div class="k">AI 平均判分用时</div></div>
+    <div class="kpi"><div class="v">${confirmed.length}</div><div class="k">老师已确认（份）</div></div>
+    <div class="kpi"><div class="v">${avgDiff != null ? avgDiff.toFixed(1) + ' 分' : '—'}</div><div class="k">AI 与老师平均分差</div></div>`;
+  const body = $('#statBody');
+  if (!confirmed.length) { body.innerHTML = '<div class="empty">暂无老师确认过的成绩。老师确认后这里会对比 AI 分数与老师分数。</div>'; return; }
+  body.innerHTML = `<table class="stat"><tr><th>学生</th><th>题目</th><th>AI 分</th><th>老师终评分</th><th>差值</th><th>AI 用时</th><th>老师评语</th></tr>` +
+    confirmed.map(s => {
+      const q = state.questions.find(x => x.id === s.questionId);
+      const d = s.aiScore - s.teacherScore;
+      return `<tr><td>${esc(s.studentName)}</td><td>${esc(q ? q.title : '—')}</td>
+        <td>${s.aiScore}</td><td>${s.teacherScore}</td>
+        <td class="${diffClass(d)}">${d > 0 ? '+' : ''}${d}</td>
+        <td>${fmtSec(s.aiDurationMs)}</td><td style="text-align:left">${esc(s.teacherComment || '—')}</td></tr>`;
+    }).join('') + '</table>';
+}
+
+// ---------- 其他电脑访问 ----------
+function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  }
+  return Promise.resolve(fallbackCopy(text));
+}
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+  document.body.appendChild(ta); ta.select();
+  try { document.execCommand('copy'); } catch (_) {}
+  document.body.removeChild(ta);
+}
+function addrRow(label, url) {
+  return `<div class="addr"><span class="lab">${label}</span><code>${esc(url)}</code>
+    <button class="btn ghost sm" data-copy="${esc(url)}">复制</button>
+    <a class="open" href="${esc(url)}" target="_blank" rel="noopener">打开</a></div>`;
+}
+async function loadAccess() {
+  const box = $('#accessBox'), tips = $('#accessTips');
+  if (Cloud.ready) {
+    box.innerHTML = addrRow('当前地址', window.location.origin);
+    box.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
+      copyText(b.dataset.copy).then(() => toast('已复制：' + b.dataset.copy));
+    });
+    tips.innerHTML = '这是<b>云服务应用的公网地址</b>：任何网络下的电脑、手机（含流量）都能打开，把链接发给学生即可。<br>' +
+      '题目、提交、判分结果都保存在云端数据库，换设备打开看到的是同一份数据。';
+    return;
+  }
+  try {
+    const i = await api('/api/info');
+    // 浏览器里的真实访问地址永远以 location.origin 为准（云端反向代理会改写 Host）
+    const origin = window.location.origin;
+    const cur = new URL(origin).hostname;
+    const isLanAddr = (i.lanUrls || []).some(u => { try { return new URL(u).hostname === cur; } catch (_) { return false; } });
+    const isPublic = !isLanAddr && !/^(127\.0\.0\.1|localhost)$/.test(cur);
+    let html = addrRow('当前地址', origin);
+    if (!isPublic) {
+      const lan = (i.lanUrls || []).filter(u => u !== origin);
+      lan.forEach((u, k) => { html += addrRow(k === 0 ? '同网段设备' : '其他网卡', u); });
+      html += addrRow('本机', 'http://127.0.0.1:' + i.port);
+    }
+    box.innerHTML = html;
+    box.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => {
+      copyText(b.dataset.copy).then(() => toast('已复制：' + b.dataset.copy));
+    });
+    tips.innerHTML = isPublic
+      ? '这是<b>公网地址</b>：任何网络下的电脑、手机（含流量）都能打开，把链接发给学生即可。<br>' +
+        '注意：系统没有登录鉴权，能拿到链接的人都能操作老师端，请勿公开传播。'
+      : (i.lanUrls && i.lanUrls.length
+        ? '用法：把这个地址发给同一局域网的同学，他们用浏览器（电脑或手机）打开就能提交答案；老师在任意一台电脑上判分，结果都是同一份数据。<br>' +
+          '打不开时依次检查：① 两台设备连的是同一个 WiFi/局域网；② Windows 首次启动会弹防火墙提示，必须点「允许访问」（专用网络）；' +
+          '③ 公司/学校网络可能开启了「客户端隔离」，此时需要换网络或用手机热点。'
+        : '当前以「仅本机」模式启动，其他电脑无法访问。请关闭后重新启动（默认即为局域网模式），或用 HOST=0.0.0.0 启动。');
+    tips.innerHTML += '<br><br>' + (i.storage === 'cloud'
+      ? '<b>数据存储：云端数据库</b> —— 本机改动会实时写入云端，线上页面刷新即可看到；线上改动在本机刷新后也能看到，两端始终是同一份数据。'
+      : '<b>数据存储：本机 data/db.json</b> —— 与线上数据互相独立。在 ai-grader/data/ 下放 cloud.json 即可切换为与线上共用云端数据。');
+  } catch (e) {
+    box.innerHTML = '获取访问地址失败：' + esc(e.message);
+  }
+}
+
+// ---------- 设置 ----------
+let settingsLoaded = false;
+
+async function renderCloudCard() {
+  const box = $('#cloudBox');
+  box.innerHTML = '<b>状态：</b>已连接云端环境<br>' +
+    '<b>数据存储：</b>云数据库（表 questions / submissions），多设备共享同一份数据<br>' +
+    '<b>AI 判分：</b>云端模型，免 API Key，下方可直接切换模型';
+  const sel = $('#cloudModelSel');
+  try {
+    await ensureModel();
+    sel.innerHTML = Cloud.models.map(m =>
+      `<option value="${esc(m.id)}"${m.id === Cloud.model ? ' selected' : ''}>${esc(m.name || m.id)}</option>`).join('');
+    sel.onchange = () => {
+      Cloud.model = sel.value;
+      localStorage.setItem('grader.model', sel.value);
+      toast('已切换判分模型：' + sel.value); refresh();
+    };
+  } catch (e) {
+    sel.innerHTML = '<option value="">（云端暂无可用模型）</option>';
+    box.innerHTML += '<br><span style="color:var(--err)">' + esc(e.message) + '</span>';
+  }
+}
+
+async function loadSettings() {
+  if (Cloud.ready) {
+    $('#cloudCard').style.display = '';
+    $('#aiSetCard').style.display = 'none';
+    await renderCloudCard();
+    return;
+  }
+  $('#cloudCard').style.display = 'none';
+  $('#aiSetCard').style.display = '';
+  let s;
+  try { s = await api('/api/settings'); }
+  catch (e) { $('#setCurrent').innerHTML = '读取本机 AI 设置失败：' + esc(e.message); return; }
+  const srcText = { settings: '网页设置', env: '环境变量', workbuddy: '本机 WorkBuddy 网关' }[s.source] || '';
+  $('#setCurrent').innerHTML = s.configured
+    ? `<b>当前生效：</b>${esc(s.label || srcText)} · 模型 <code>${esc(s.model)}</code> · 地址 <code>${esc(s.endpointHost)}</code>${s.hasApiKey ? ' · 已设置 API Key' : ''}`
+    : '<b>当前未配置 AI 服务。</b>请选择下方服务商，填入 API Key 与模型后点「保存设置」；学生提交答案前必须先配置好。';
+  if (!settingsLoaded) {
+    $('#presetSel').innerHTML = '<option value="">— 请选择 —</option>' +
+      s.presets.map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join('');
+    $('#presetSel').onchange = () => {
+      const p = s.presets.find(x => x.id === $('#presetSel').value);
+      if (!p) return;
+      if (p.baseUrl) $('#setBase').value = p.baseUrl;
+      if (p.model) $('#setModel').value = p.model;
+      $('#presetNote').textContent = p.note || '';
+    };
+    settingsLoaded = true;
+  }
+  if (s.savedBaseUrl) $('#setBase').value = s.savedBaseUrl;
+  if (s.savedModel) $('#setModel').value = s.savedModel;
+  $('#setStream').value = s.savedStream === false ? '0' : '1';
+}
+
+$('#btnSaveSet').onclick = async () => {
+  try {
+    await api('/api/settings', { method: 'POST', body: JSON.stringify({
+      baseUrl: $('#setBase').value.trim(), apiKey: $('#setKey').value,
+      model: $('#setModel').value.trim(), provider: $('#presetSel').selectedOptions[0] ? $('#presetSel').selectedOptions[0].textContent : '',
+      stream: $('#setStream').value === '1',
+    }) });
+    $('#setKey').value = '';
+    toast('设置已保存'); await loadSettings(); refresh();
+  } catch (e) { toast(e.message); }
+};
+$('#btnTestSet').onclick = async () => {
+  const out = $('#setTestOut'); out.style.display = '';
+  out.innerHTML = '<span class="spin"></span> 正在测试连接…';
+  try {
+    const r = await api('/api/settings/test', { method: 'POST', body: JSON.stringify({
+      baseUrl: $('#setBase').value.trim(), apiKey: $('#setKey').value, model: $('#setModel').value.trim(),
+      stream: $('#setStream').value === '1',
+    }) });
+    out.innerHTML = r.ok
+      ? `连接成功：模型 <code>${esc(r.model)}</code> 返回「${esc(r.reply)}」，耗时 ${(r.elapsedMs / 1000).toFixed(1)} 秒。可以点「保存设置」了。`
+      : `连接失败：${esc(r.error)}`;
+  } catch (e) { out.innerHTML = '测试失败：' + esc(e.message); }
+};
+$('#btnClearSet').onclick = async () => {
+  if (!confirm('清空网页中保存的 AI 配置，改为自动检测环境变量/本机网关？')) return;
+  await api('/api/settings', { method: 'POST', body: JSON.stringify({ baseUrl: '' }) });
+  $('#setKey').value = ''; $('#setBase').value = ''; $('#setModel').value = '';
+  toast('已恢复自动检测'); await loadSettings(); refresh();
+};
+
+// ---------- 启动 ----------
+async function bootData() {
+  const cloudReady = initCloud();
+  // 本机/局域网访问时云服务不可用，不能让它拖住首屏：最多等 3.5 秒
+  await Promise.race([cloudReady, new Promise(r => setTimeout(r, 3500))]);
+  $('#aiSetCard').style.display = Cloud.ready ? 'none' : '';
+  try { await refresh(); }
+  catch (e) { toast('加载数据失败：' + e.message); }
+  // 云服务晚一步连上时，自动切到云端数据
+  cloudReady.then(async () => {
+    if (!Cloud.ready) return;
+    $('#aiSetCard').style.display = 'none';
+    try { await refresh(); } catch (e) { toast('云端数据加载失败：' + e.message); }
+  });
+}
+
+(function boot() {
+  const s = readSession();
+  if (!s) { showLogin(); return; }   // 未登录：停在登录页，不加载任何数据
+  enterApp(s);
+})();
+</script>
+</body>
+</html>

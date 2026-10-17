@@ -1,0 +1,15 @@
+# 依赖与构建产物
+node_modules/
+*.log
+
+# 运行时数据（含学生答案、老师批改记录）——不要提交
+data/db.json
+
+# 运行时配置（可能含大模型 API Key、云服务配置）——不要提交
+data/settings.json
+data/cloud.json
+.env
+.env.*
+
+# 临时验证脚本与截图
+.tmp/
