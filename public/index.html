@@ -30,8 +30,12 @@
     box-shadow: 0 1px 3px rgba(16,24,40,.10); }
   .llm-badge { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap;
     display: flex; align-items: center; gap: 6px; background: #f7f8fa; border: 1px solid var(--border);
-    border-radius: 20px; padding: 5px 11px; }
-  .llm-badge .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
+    border-radius: 20px; padding: 5px 11px; cursor: pointer; font-family: inherit; max-width: 280px; }
+  .llm-badge:hover { border-color: #cdd8f8; background: #f3f6fe; }
+  .llm-badge.open { border-color: var(--primary); background: var(--primary-weak); color: var(--primary); }
+  .llm-badge .lb-t { overflow: hidden; text-overflow: ellipsis; }
+  .llm-badge .lb-c { font-size: 9px; opacity: .55; }
+  .llm-badge .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; flex: 0 0 auto; }
   .st.on { background: var(--ok); } .st.off { background: var(--err); }
   main { max-width: 980px; margin: 20px auto 60px; padding: 0 20px; }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
@@ -166,6 +170,27 @@
   .um-item:hover { background: #f5f6f8; }
   .um-item.quit { color: var(--err); }
 
+  /* 云服务下拉面板（顶栏右侧） */
+  .cloud-wrap { position: relative; }
+  .cloud-pop { position: absolute; right: 0; top: 42px; width: 320px; background: #fff;
+    border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 10px 30px rgba(16,24,40,.16);
+    z-index: 40; overflow: hidden; }
+  .cp-head { padding: 12px 14px; font-size: 13.5px; font-weight: 600; border-bottom: 1px solid #f0f2f5;
+    display: flex; align-items: center; }
+  .cp-close { margin-left: auto; cursor: pointer; color: var(--muted); font-size: 17px; line-height: 1;
+    padding: 0 3px; border-radius: 5px; font-weight: 400; }
+  .cp-close:hover { background: #f2f4f7; color: var(--text); }
+  .cp-body { padding: 12px 14px 14px; font-size: 12.5px; color: var(--muted); line-height: 1.8; }
+  .cp-body .cp-row { display: flex; align-items: flex-start; gap: 8px; padding: 5px 0; }
+  .cp-body .cp-row .k { width: 62px; flex: 0 0 auto; color: #8a93a3; }
+  .cp-body .cp-row .v { color: var(--text); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .cp-body .cp-sec { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+  .cp-body label { margin: 0 0 5px; font-size: 12.5px; }
+  .cp-body select { font-size: 13px; padding: 7px 10px; }
+  .cp-body .cp-tip { font-size: 11.5px; color: #8a93a3; margin-top: 8px; line-height: 1.7; }
+  .cp-body .cp-err { color: var(--err); }
+  .cp-body .cp-link { color: var(--primary); cursor: pointer; text-decoration: none; font-size: 12.5px; }
+
   /* ================= 移动端适配（手机浏览器） ================= */
   @media (max-width: 760px) {
     html { -webkit-text-size-adjust: 100%; }
@@ -175,12 +200,15 @@
     .logo .mk { width: 24px; height: 24px; font-size: 12px; }
     .user-wrap { order: 2; margin-left: auto; gap: 8px; }
     .user-wrap .ava { width: 30px; height: 30px; }
-    .llm-badge { order: 3; font-size: 11px; padding: 4px 9px; max-width: 44vw; overflow: hidden; }
+    .llm-badge { order: 3; font-size: 11px; padding: 4px 9px; max-width: 46vw; }
+    .llm-badge .lb-t { max-width: 34vw; }
+    .cloud-pop { position: fixed; left: 10px; right: 10px; top: 58px; width: auto; }
+    .cp-body select { font-size: 16px; }
     nav { order: 4; flex: 1 1 100%; overflow-x: auto; gap: 2px; padding-bottom: 2px;
       -webkit-overflow-scrolling: touch; scrollbar-width: none; }
     nav::-webkit-scrollbar { display: none; }
     nav button { flex: 0 0 auto; padding: 7px 12px; font-size: 13px; white-space: nowrap; }
-    .user-menu { right: -4px; }
+    .user-menu { right: -4px; top: 44px; }
 
     main { margin: 12px auto 40px; padding: 0 12px; }
     .card { padding: 14px; border-radius: 10px; margin-bottom: 12px; }
@@ -316,7 +344,15 @@
     <button data-tab="settings">账号设置</button>
   </nav>
   <div class="user-wrap" id="userBox" style="display:none">
-    <div class="llm-badge" id="llmBadge"></div>
+    <!-- 云服务（顶栏右侧，点击展开面板） -->
+    <div class="cloud-wrap" id="cloudWrap">
+      <button class="llm-badge" id="llmBadge" type="button" title="云服务状态与判分模型"></button>
+      <div class="cloud-pop" id="cloudPop" style="display:none">
+        <div class="cp-head">云服务 <span class="cp-close" id="cloudClose" title="关闭">×</span></div>
+        <div id="cloudPopBody" class="cp-body">加载中…</div>
+      </div>
+    </div>
+    <!-- 账号菜单 -->
     <div class="ava" id="userAva" title="账号菜单">–</div>
     <div class="user-menu" id="userMenu" style="display:none">
       <div class="who" id="userWho"></div>
@@ -606,6 +642,7 @@ function applyRole() {
   $('#userWho').innerHTML = '<b>' + esc(session.account) + '</b> · ' + roleText;
   $('#userAva').textContent = String(session.account || '').slice(-2);
   closeUserMenu();
+  closeCloudPop();
   if (isStudent()) {
     $('#sName').value = session.account;
     $('#sName').readOnly = true;
@@ -618,18 +655,84 @@ function closeUserMenu() {
   const m = $('#userMenu'); if (m) m.style.display = 'none';
   const a = $('#userAva'); if (a) a.classList.remove('open');
 }
+
+// ---------- 云服务面板（顶栏右侧） ----------
+function closeCloudPop() {
+  const p = $('#cloudPop'); if (p) p.style.display = 'none';
+  const b = $('#llmBadge'); if (b) b.classList.remove('open');
+}
+function toggleCloudPop() {
+  const p = $('#cloudPop');
+  const open = p.style.display === 'none';
+  closeUserMenu();
+  p.style.display = open ? '' : 'none';
+  $('#llmBadge').classList.toggle('open', open);
+}
+$('#llmBadge').onclick = e => { e.stopPropagation(); toggleCloudPop(); };
+$('#cloudClose').onclick = e => { e.stopPropagation(); closeCloudPop(); };
+
+/** 渲染云服务面板内容（状态、模型切换、数据说明） */
+async function renderCloudPop() {
+  const box = $('#cloudPopBody');
+  if (!box) return;
+  if (!Cloud.ready) {
+    box.innerHTML =
+      `<div class="cp-row"><span class="k">状态</span><span class="v cp-err">未连接云端环境</span></div>
+       <div class="cp-row"><span class="k">数据存储</span><span class="v">本机 data/db.json（与线上数据独立）</span></div>
+       <div class="cp-row"><span class="k">AI 判分</span><span class="v">${state.llmConfigured ? esc(state.llmModel || '已配置') : (isAdmin() ? '未配置' : '未配置（请联系管理员 99999）')}</span></div>
+       <div class="cp-sec">${esc(Cloud.error || '当前不是云端访问地址，云服务按域名授权不可用。')}</div>`;
+    return;
+  }
+  let models = [];
+  try { await ensureModel(); models = Cloud.models || []; } catch (e) { /* 下面提示 */ }
+  const cur = Cloud.model || '';
+  const opts = models.length
+    ? models.map(m => `<option value="${esc(m.id)}"${m.id === cur ? ' selected' : ''}>${esc(m.name || m.id)}</option>`).join('')
+    : '<option value="">（云端暂无可用模型）</option>';
+  box.innerHTML =
+    `<div class="cp-row"><span class="k">状态</span><span class="v"><span class="st on"></span><span style="color:var(--ok);font-weight:600">已连接云服务</span></span></div>
+     <div class="cp-row"><span class="k">地址</span><span class="v">${esc(location.host)}</span></div>
+     <div class="cp-row"><span class="k">数据</span><span class="v">云数据库 · 多设备共用同一份数据</span></div>
+     <div class="cp-sec">
+       <label><b>判分模型</b>（免 API Key）</label>
+       <select id="cpModelSel">${opts}</select>
+       <div class="cp-tip">切换后立即生效，只影响你自己这次判分；每个账号各自记住选择。</div>
+     </div>
+     ${Cloud.error ? `<div class="cp-sec cp-err">${esc(Cloud.error)}</div>` : ''}
+     ${isAdmin() ? '<div class="cp-sec"><a class="cp-link" id="cpGoSet">打开账号设置 · 查看完整云服务信息 →</a></div>' : ''}`;
+  const sel = $('#cpModelSel');
+  if (sel) sel.onchange = () => {
+    Cloud.model = sel.value;
+    localStorage.setItem('grader.model', sel.value);
+    toast('已切换判分模型：' + sel.value);
+    const msel = $('#cloudModelSel');
+    if (msel) msel.value = sel.value;
+    refresh();
+  };
+  const go = $('#cpGoSet');
+  if (go) go.onclick = e => {
+    e.stopPropagation(); closeCloudPop();
+    const b = document.querySelector('nav button[data-tab="settings"]');
+    if (b && b.style.display !== 'none') b.click();
+  };
+}
+
 $('#userAva').onclick = e => {
   e.stopPropagation();
+  closeCloudPop();
   const m = $('#userMenu');
   const open = m.style.display === 'none';
   m.style.display = open ? '' : 'none';
   $('#userAva').classList.toggle('open', open);
 };
 document.addEventListener('click', e => {
-  if (!e.target.closest('#userBox')) closeUserMenu();
+  if (!e.target.closest('#userBox')) { closeUserMenu(); closeCloudPop(); }
+});
+$('#userMenu').addEventListener('click', e => {
+  if (!e.target.closest('.um-item')) e.stopPropagation();
 });
 ['#btnPwd', '#btnLogout'].forEach(sel => {
-  $(sel).addEventListener('click', closeUserMenu);
+  $(sel).addEventListener('click', () => { closeUserMenu(); closeCloudPop(); });
 });
 
 function switchTab(tab) {
@@ -1115,16 +1218,17 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
 async function refresh() {
   state = await store.loadState();
   if (Cloud.ready) {
-    $('#llmBadge').innerHTML = state.llmConfigured
-      ? '<span class="st on"></span>云服务已连接 · ' + esc(state.llmModel || '云端 AI')
-      : '<span class="st on"></span>云服务已连接 · 暂无可用模型';
+    $('#llmBadge').innerHTML = (state.llmConfigured
+      ? '<span class="st on"></span><span class="lb-t">云服务 · ' + esc(state.llmModel || '云端 AI') + '</span>'
+      : '<span class="st on"></span><span class="lb-t">云服务 · 暂无可用模型</span>') + '<span class="lb-c">▾</span>';
   } else {
-    $('#llmBadge').innerHTML = state.llmConfigured
-      ? '<span class="st on"></span>AI 已连接 · ' + esc(state.llmModel || '')
+    $('#llmBadge').innerHTML = (state.llmConfigured
+      ? '<span class="st on"></span><span class="lb-t">AI · ' + esc(state.llmModel || '') + '</span>'
       : (isAdmin()
-        ? '<span class="st off"></span>AI 未配置（在「账号设置」里配置）'
-        : '<span class="st off"></span>AI 未配置（请联系管理员）');
+        ? '<span class="st off"></span><span class="lb-t">AI 未配置</span>'
+        : '<span class="st off"></span><span class="lb-t">AI 未配置</span>')) + '<span class="lb-c">▾</span>';
   }
+  renderCloudPop();
   const banner = $('#llmBanner');
   if (!state.llmConfigured) {
     banner.style.display = '';
