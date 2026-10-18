@@ -2,7 +2,8 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
 <title>AI 判分系统</title>
 <style>
   :root {
@@ -106,7 +107,8 @@
     border-radius: 16px; box-shadow: 0 12px 32px rgba(16,24,40,.10); padding: 30px 28px 26px; }
   .login-card .brand { display: flex; align-items: center; gap: 9px; font-size: 19px; font-weight: 700; }
   .login-card .brand .dot { width: 11px; height: 11px; border-radius: 3px; background: var(--primary); }
-  .login-card .sub { color: var(--muted); font-size: 13px; margin: 8px 0 22px; line-height: 1.7; }
+  .login-card .sub { color: var(--muted); font-size: 13px; margin: 8px 0 22px; line-height: 1.7;
+    border: 0; border-radius: 0; box-shadow: none; overflow: visible; }
   .login-card label { margin: 0 0 6px; }
   .login-card .fld { margin-bottom: 14px; }
   .login-card .btn { width: 100%; padding: 11px; font-size: 15px; margin-top: 6px; }
@@ -144,6 +146,89 @@
   .user-box { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
   .user-box .who { white-space: nowrap; }
   .user-box .who b { color: var(--text); font-weight: 600; }
+
+  /* ================= 移动端适配（手机浏览器） ================= */
+  @media (max-width: 760px) {
+    html { -webkit-text-size-adjust: 100%; }
+    /* 顶栏：第一行 品牌 + 账号操作，第二行 页签横向滑动，第三行 模型状态 */
+    header { flex-wrap: wrap; gap: 8px 10px; padding: 10px 12px; }
+    .logo { order: 1; font-size: 15px; flex: 0 0 auto; }
+    .user-box { order: 2; margin-left: auto; gap: 6px; }
+    .user-box .who { font-size: 12px; }
+    nav { order: 3; flex: 1 1 100%; overflow-x: auto; gap: 2px; padding-bottom: 2px;
+      -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    nav::-webkit-scrollbar { display: none; }
+    nav button { flex: 0 0 auto; padding: 7px 12px; font-size: 13px; white-space: nowrap; }
+    .llm-badge { order: 4; flex: 1 1 100%; margin-left: 0; font-size: 11px; }
+
+    main { margin: 12px auto 40px; padding: 0 12px; }
+    .card { padding: 14px; border-radius: 10px; margin-bottom: 12px; }
+    h2 { font-size: 14px; flex-wrap: wrap; gap: 6px; }
+    h2 .hint { flex: 1 1 100%; font-size: 11px; line-height: 1.6; }
+    label { margin: 10px 0 4px; }
+    /* 16px 可避免 iOS 聚焦输入框时自动缩放页面 */
+    input[type=text], input[type=number], input[type=password], textarea, select { font-size: 16px; }
+    textarea { min-height: 92px; }
+    .row { flex-direction: column; gap: 10px; }
+    .btn { min-height: 40px; padding: 9px 16px; }
+    .btn.sm { min-height: 32px; padding: 4px 11px; font-size: 12px; }
+
+    /* 题目 / 提交卡片 */
+    .q-item { padding: 10px 12px; gap: 10px; flex-wrap: wrap; }
+    .q-item .t { font-size: 14px; line-height: 1.5; }
+    .sub-head { padding: 12px; gap: 8px 10px; }
+    .sub-head .name { flex: 1 1 100%; }
+    .sub-body { padding: 0 12px 12px; overflow-x: auto; }
+    .ans { padding: 10px 12px; font-size: 13px; overflow-wrap: anywhere; }
+    .summary-box { padding: 10px 12px; font-size: 13px; overflow-wrap: anywhere; }
+    .score-big { font-size: 19px; margin-left: 0; }
+    table.brk { min-width: 420px; }
+    .grade-row { gap: 10px; }
+    .grade-row .f.score, .grade-row .f.cmt { width: 100%; min-width: 0; }
+    .grade-row .btn { flex: 1 1 auto; }
+
+    /* 统计 */
+    .kpis { gap: 10px; }
+    .kpi { min-width: calc(50% - 5px); padding: 12px 14px; }
+    .kpi .v { font-size: 19px; }
+    #statBody { overflow-x: auto; }
+    table.stat { min-width: 400px; }
+    table.stat th, table.stat td { padding: 8px 8px; }
+
+    /* 云端地址 */
+    .addr { gap: 6px; }
+    .addr .lab { width: 100%; }
+    .addr code { font-size: 12px; overflow-wrap: anywhere; }
+
+    /* 登录页 */
+    .login-wrap { padding: 16px; padding-top: max(28px, env(safe-area-inset-top)); align-items: flex-start; }
+    .login-card { padding: 22px 18px 20px; border-radius: 14px; }
+    .login-card .brand { font-size: 18px; }
+    .login-card .sub { margin: 6px 0 18px; font-size: 12px; }
+    .login-tip { font-size: 11px; line-height: 1.8; }
+    .modal { padding: 0; align-items: flex-end; }
+    .modal-card { max-width: none; border-radius: 16px 16px 0 0; padding: 18px 16px;
+      padding-bottom: calc(18px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
+
+    /* 管理员账号列表 / 密码申请 */
+    .acc-list { max-height: 62vh; padding: 6px; }
+    .acc-row { flex-wrap: wrap; gap: 6px; padding: 8px 2px; }
+    .acc-row .idx { width: 100%; font-size: 12px; }
+    .acc-row input { height: 38px; font-size: 16px; flex: 1 1 110px; min-width: 0; }
+    .acc-row .state { width: auto; margin-left: auto; }
+    .req-row { gap: 6px; padding: 8px 2px; }
+    .req-row .who { min-width: 64px; }
+    .req-row .code { letter-spacing: .5px; }
+
+    /* 提示条改到底部，避免遮挡顶栏 */
+    .toast { top: auto; bottom: calc(24px + env(safe-area-inset-bottom)); max-width: calc(100% - 28px); text-align: center; }
+  }
+
+  @media (max-width: 380px) {
+    .logo { font-size: 14px; }
+    nav button { padding: 7px 10px; font-size: 12px; }
+    .kpi { min-width: 100%; }
+  }
 </style>
 </head>
 <body>
