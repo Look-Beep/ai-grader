@@ -1,5 +1,5 @@
 /**
- * AI 判分系统 - 后端服务
+ * 智慧判 - 后端服务
  * 纯 Node.js 内置模块实现，零第三方依赖，需 Node.js 18+（用到全局 fetch）。
  *
  * 数据存储：data/db.json
@@ -263,24 +263,51 @@ const Store = {
 };
 
 // ---------------- 账号表（管理员可改教师/学生账号与密码） ----------------
-async function loadAccounts() {
-  accountsCache.clear();
-  if (cloudOn()) {
+// 实时同步要点：账号数据以云数据库为唯一数据源。
+//   · 本实例写入后立即更新缓存（写穿）
+//   · 缓存带 TTL，过期后下次读取自动回源云端（感知其他实例/线上端的改动）
+//   · 登录、改密等关键校验强制回源，保证密码修改立刻全端生效
+const ACCOUNTS_TTL_MS = 3000;          // 缓存有效期 3 秒
+let accountsLoadedAt = 0;
+let accountsLoading = null;            // 并发去重：多个请求同时回源只发一次
+
+async function loadAccounts(force) {
+  if (!cloudOn()) {
+    accountsCache.clear();
+    try {
+      const list = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8'));
+      (list || []).forEach(u => accountsCache.set(String(u.account), u));
+    } catch (_) {}
+    accountsLoadedAt = Date.now();
+    return;
+  }
+  // 缓存仍新鲜且非强制刷新 → 直接用
+  if (!force && accountsLoadedAt && Date.now() - accountsLoadedAt < ACCOUNTS_TTL_MS) return;
+  if (accountsLoading) return accountsLoading;      // 已有请求在回源，复用它
+  accountsLoading = (async () => {
     try {
       const rows = await cloudFetch('accounts?select=account,password,role,disabled');
-      (rows || []).forEach(r => accountsCache.set(String(r.account), {
+      const next = new Map();
+      (rows || []).forEach(r => next.set(String(r.account), {
         account: String(r.account), password: String(r.password || ''), role: String(r.role || 'student'),
         disabled: !!r.disabled,
       }));
+      accountsCache.clear();
+      next.forEach((v, k) => accountsCache.set(k, v));
+      accountsLoadedAt = Date.now();
     } catch (e) {
-      console.error('[accounts] 读取失败，按默认账号规则运行:', e.message);
+      // 回源失败：保留旧缓存继续服务，不把用户挡在门外
+      console.error('[accounts] 云端读取失败，沿用缓存:', e.message);
+    } finally {
+      accountsLoading = null;
     }
-    return;
-  }
-  try {
-    const list = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8'));
-    (list || []).forEach(u => accountsCache.set(String(u.account), u));
-  } catch (_) {}
+  })();
+  return accountsLoading;
+}
+
+/** 缓存可能已过期时确保拿到最新账号表（读路径统一入口） */
+async function ensureAccountsFresh() {
+  await loadAccounts(false);
 }
 
 function persistAccountsLocal() {
@@ -324,11 +351,13 @@ async function migrateOwner(oldAccount, newAccount) {
   saveDb();
 }
 
-/** 登录校验：自定义账号优先，其余走默认规则（密码=账号） */
-function verifyLogin(acc, pwd) {
+/** 登录校验：自定义账号优先，其余走默认规则（密码=账号）
+ *  fresh=true 时强制回源云端，保证「线上改的密码，本机立刻生效」，反之亦然。 */
+async function verifyLogin(acc, pwd, fresh) {
   const a = String(acc || '').trim();
   const p = String(pwd || '').trim();
   if (!a || !p) return { error: '请输入账号和密码' };
+  if (fresh) await loadAccounts(true); else await ensureAccountsFresh();
   const custom = accountsCache.get(a);
   if (custom) {
     if (custom.disabled) return { error: '该账号已停用（可能被管理员改名），请联系管理员 99999' };
@@ -734,7 +763,7 @@ async function handleApi(req, res, pathname) {
   // ---- 登录（服务端校验账号密码，支持管理员改过的账号） ----
   if (req.method === 'POST' && pathname === '/api/login') {
     const b = await readBody(req, 8 * 1024);
-    const r = verifyLogin(b.account, b.password);
+    const r = await verifyLogin(b.account, b.password, true);   // 登录强制回源：密码改动立即全端生效
     if (r.error) return sendJson(res, 401, { error: r.error });
     const label = r.role === 'admin' ? '管理员 ' : (r.role === 'teacher' ? '教师 ' : '学生 ');
     return sendJson(res, 200, { account: r.account, role: r.role, name: label + r.account });
@@ -753,7 +782,7 @@ async function handleApi(req, res, pathname) {
     const b = await readBody(req, 8 * 1024);
     const oldPwd = String(b.oldPassword || '');
     const newPwd = String(b.newPassword || '');
-    const v = verifyLogin(acc, oldPwd);
+    const v = await verifyLogin(acc, oldPwd, true);
     if (v.error) return sendJson(res, 403, { error: '原密码不正确' });
     const pe = pwdCheck(newPwd);
     if (pe) return sendJson(res, 400, { error: pe });
@@ -854,6 +883,7 @@ async function handleApi(req, res, pathname) {
     const acc = accountOf(req);
     if (!acc) return sendJson(res, 401, { error: '请先登录' });
     if (roleOfAccount(acc) !== 'admin') return sendJson(res, 403, { error: '只有管理员账号可以管理账号' });
+    await loadAccounts(true);   // 管理页强制回源，看到的永远是最新账号与密码
     let qs, subs;
     try { qs = await Store.questions(); subs = await Store.submissions(); }
     catch (e) { return sendJson(res, 502, { error: '云端数据读取失败：' + e.message }); }
@@ -1172,11 +1202,11 @@ const MIME = {
 function notFound(res) {
   res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">' +
-    '<title>页面不存在 · AI 判分系统</title></head>' +
+    '<title>页面不存在 · 智慧判</title></head>' +
     '<body style="font-family:system-ui,-apple-system,sans-serif;padding:56px 24px;text-align:center;color:#222">' +
     '<h1 style="font-size:20px;margin:0 0 10px">页面不存在</h1>' +
     '<p style="color:#666;font-size:14px;margin:0 0 18px">这个地址在系统里没有对应的页面。</p>' +
-    '<p><a href="/" style="color:#2563eb;font-size:14px">返回 AI 判分系统首页</a></p>' +
+    '<p><a href="/" style="color:#2563eb;font-size:14px">返回 智慧判首页</a></p>' +
     '</body></html>');
 }
 
@@ -1262,11 +1292,11 @@ function start(port, attempt) {
 
   server.on('error', e => {
     if (e.code === 'EADDRINUSE' && attempt < 10) {
-      console.warn('[AI 判分系统] 端口 ' + port + ' 被占用，尝试 ' + (port + 1) + ' …');
+      console.warn('[智慧判] 端口 ' + port + ' 被占用，尝试 ' + (port + 1) + ' …');
       start(port + 1, attempt + 1);
       return;
     }
-    console.error('[AI 判分系统] 启动失败：', e.message);
+    console.error('[智慧判] 启动失败：', e.message);
     process.exit(1);
   });
 
@@ -1275,7 +1305,7 @@ function start(port, attempt) {
     const cfg = resolveLLM();
     const lan = lanAddresses();
     console.log('==================================================');
-    console.log(' AI 判分系统 已启动');
+    console.log(' 智慧判 已启动');
     console.log(' 本机访问:     http://127.0.0.1:' + port);
     if (HOST === '0.0.0.0') {
       if (lan.length) {
@@ -1291,7 +1321,7 @@ function start(port, attempt) {
     }
     console.log(' AI 服务:     ' + (cfg ? cfg.label + ' / ' + cfg.model + '（' + hostOf(cfg.endpoint) + '）' : '未配置 —— 请打开页面「设置」填写'));
     console.log(' 数据存储:     ' + (cloudOn()
-      ? '云端数据库（与线上共用同一份数据）' + cloudCfg.endpoint
+      ? '云端数据库（题目/提交/账号/密码全部实时同步）' + cloudCfg.endpoint
       : '本机 data/db.json（未启用云端同步）'));
     console.log(' 按 Ctrl+C 停止服务');
     console.log('==================================================');
