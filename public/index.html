@@ -115,6 +115,9 @@
   .login-tip { margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border);
     font-size: 12px; color: var(--muted); line-height: 1.9; }
   .login-tip b { color: var(--text); }
+  .remember { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted);
+    margin: 2px 0 4px; cursor: pointer; user-select: none; }
+  .remember input { width: 15px; height: 15px; margin: 0; cursor: pointer; }
   .user-box { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
   .user-box .who { white-space: nowrap; }
   .user-box .who b { color: var(--text); font-weight: 600; }
@@ -135,6 +138,7 @@
       <label><b>密码</b></label>
       <input type="password" id="loginPwd" maxlength="5" autocomplete="current-password" placeholder="请输入密码">
     </div>
+    <label class="remember"><input type="checkbox" id="loginRemember" checked> 记住我（这台设备 30 天内免登录）</label>
     <button class="btn" id="btnLogin">登录</button>
     <div class="login-tip">
       <b>教师账号</b>：00000 – 00005 &nbsp;·&nbsp; 可出题、判分与确认<br>
@@ -292,7 +296,7 @@ const AUTH = {
   student: { from: 26006, to: 26200 },
 };
 const SESSION_KEY = 'grader.session';
-const SESSION_TTL = 12 * 3600 * 1000; // 12 小时内免重复登录
+const SESSION_TTL = 30 * 24 * 3600 * 1000; // 30 天内免重复登录（每次访问自动续期）
 
 let session = null;
 
@@ -317,16 +321,35 @@ function checkLogin(acc, pwd) {
 
 function readSession() {
   try {
-    const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+    // 优先「记住我」的长期存储；没勾选时用 sessionStorage（关掉页面即失效）
+    let raw = localStorage.getItem(SESSION_KEY);
+    let persistent = !!raw;
+    if (!raw) raw = sessionStorage.getItem(SESSION_KEY);
+    const s = JSON.parse(raw || 'null');
     if (!s || !s.account || !s.ts) return null;
     if (Date.now() - s.ts > SESSION_TTL) return null;
     const role = roleOf(s.account);
     if (!role || role !== s.role) return null;
+    // 滑动续期：只要还在用，登录状态就一直往后顺延，不会因为「关掉网页过了几天」被踢下线
+    s.ts = Date.now();
+    saveSession(s, persistent);
     return s;
   } catch (_) { return null; }
 }
-function saveSession(s) { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (_) {} }
-function clearSession() { try { localStorage.removeItem(SESSION_KEY); } catch (_) {} }
+function saveSession(s, remember) {
+  const keep = remember !== false;
+  try {
+    if (keep) { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); sessionStorage.removeItem(SESSION_KEY); }
+    else { sessionStorage.setItem(SESSION_KEY, JSON.stringify(s)); localStorage.removeItem(SESSION_KEY); }
+    localStorage.setItem('grader.lastAccount', s.account || '');
+  } catch (_) {}
+}
+function clearSession() {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
+  } catch (_) {}
+}
 
 const isTeacher = () => !!session && session.role === 'teacher';
 
@@ -354,7 +377,15 @@ function showLogin() {
   $('#loginScreen').style.display = '';
   $('#appHeader').style.display = 'none';
   $('#appMain').style.display = 'none';
-  setTimeout(() => { const el = $('#loginAcc'); if (el) el.focus(); }, 50);
+  // 回填上次登录的账号，只需要再输密码（下次进入页面通常是这个场景）
+  try {
+    const last = localStorage.getItem('grader.lastAccount') || '';
+    if (last && !$('#loginAcc').value) $('#loginAcc').value = last;
+  } catch (_) {}
+  setTimeout(() => {
+    const pwd = $('#loginPwd');
+    if (pwd) { ($('#loginAcc').value ? pwd : $('#loginAcc')).focus(); }
+  }, 50);
 }
 
 async function enterApp(s) {
@@ -378,7 +409,7 @@ async function doLogin() {
   btn.disabled = true; btn.textContent = '登录中…';
   try {
     const s = checkLogin($('#loginAcc').value, $('#loginPwd').value);
-    saveSession(s);
+    saveSession(s, $('#loginRemember').checked);
     await enterApp(s);
     $('#loginPwd').value = '';
   } catch (e) {
