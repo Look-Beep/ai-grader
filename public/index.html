@@ -137,6 +137,8 @@
   .acc-row input { margin: 0; height: 34px; font-size: 14px; flex: 1 1 0; min-width: 90px; }
   .acc-row .btn { flex: 0 0 auto; }
   .acc-row .state { width: 54px; font-size: 12px; color: var(--ok, #0a7); flex: 0 0 auto; }
+  .acc-row input[readonly] { background: #f7f8fa; color: var(--muted); cursor: default; }
+  .acc-row .btn[disabled] { opacity: .55; cursor: default; }
   .forgot-link { text-align: center; margin-top: 12px; font-size: 13px; }
   .forgot-link a { color: #2563eb; text-decoration: none; }
   .forgot-head { font-weight: 600; margin: 16px 0 10px; font-size: 14px; }
@@ -432,9 +434,17 @@
 
     <div class="card" id="cloudCard" style="display:none">
       <h2>云服务 <span class="hint">题目、提交和判分结果都存在云端，任何设备打开都是同一份数据</span></h2>
-      <div id="cloudBox">加载中…</div>
-      <label><b>判分使用的云端模型</b>（免 API Key，由云服务统一提供）</label>
-      <select id="cloudModelSel"></select>
+      <div class="summary-box" id="cloudHint">加载中…</div>
+
+      <label style="margin-top:14px"><b>连接信息</b>（当前生效）</label>
+      <div class="acc-list" id="cloudInfo"></div>
+
+      <label style="margin-top:18px"><b>判分模型</b>（<span id="cloudModelCount">0</span> 个可用，免 API Key，由云服务统一提供）</label>
+      <div class="acc-list" id="cloudModels"></div>
+
+      <div class="mt">
+        <button class="btn ghost" id="btnReloadCloud">刷新状态</button>
+      </div>
       <div style="margin-top:14px;font-size:13px;color:var(--muted);line-height:1.9">
         · 数据表：<code>questions</code>（题目与评分标准）、<code>submissions</code>（提交、AI 判分、老师终评）<br>
         · 账号隔离：每个教师账号只能看到并操作自己发布的题目及其判分记录，教师账号之间互不可见；学生只能看到自己的提交<br>
@@ -1485,26 +1495,61 @@ async function loadAccess() {
 // ---------- 设置 ----------
 let settingsLoaded = false;
 
+/** 云服务卡片里的一行只读信息（与账号管理同款行样式） */
+function cloudInfoRow(label, value) {
+  return `<div class="acc-row"><span class="idx">${esc(label)}</span>
+    <input type="text" value="${esc(value)}" readonly title="${esc(value)}">
+  </div>`;
+}
+
 async function renderCloudCard() {
-  const box = $('#cloudBox');
-  box.innerHTML = '<b>状态：</b>已连接云端环境<br>' +
-    '<b>数据存储：</b>云数据库（表 questions / submissions），多设备共享同一份数据<br>' +
-    '<b>AI 判分：</b>云端模型，免 API Key，下方可直接切换模型';
-  const sel = $('#cloudModelSel');
+  const hint = $('#cloudHint'), info = $('#cloudInfo'), list = $('#cloudModels');
+  const cfg = window.CLOUD_PUBLIC_CONFIG || {};
+  hint.textContent = '正在读取云端状态…';
+  info.innerHTML = '<div class="empty">加载中…</div>';
+  list.innerHTML = '<div class="empty">加载中…</div>';
   try {
     await ensureModel();
-    sel.innerHTML = Cloud.models.map(m =>
-      `<option value="${esc(m.id)}"${m.id === Cloud.model ? ' selected' : ''}>${esc(m.name || m.id)}</option>`).join('');
-    sel.onchange = () => {
-      Cloud.model = sel.value;
-      localStorage.setItem('grader.model', sel.value);
-      toast('已切换判分模型：' + sel.value); refresh();
-    };
+    hint.innerHTML = '<b>已连接云服务</b> · 可用判分模型 ' + Cloud.models.length + ' 个 · 数据多设备共享';
+    info.innerHTML = [
+      cloudInfoRow('服务地址', cfg.endpoint || '云端自动分配'),
+      cloudInfoRow('数据存储', '云数据库 · questions / submissions'),
+      cloudInfoRow('AI 判分', '云端模型 · 免 API Key'),
+      cloudInfoRow('账号权限', '教师按账号隔离题目，学生只见自己的提交'),
+    ].join('');
+    $('#cloudModelCount').textContent = Cloud.models.length;
+    if (!Cloud.models.length) {
+      list.innerHTML = '<div class="empty">云端暂无可用模型</div>';
+      return;
+    }
+    list.innerHTML = Cloud.models.map(m => {
+      const cur = m.id === Cloud.model;
+      return `<div class="acc-row" data-id="${esc(m.id)}">
+        <span class="idx">${cur ? '当前使用' : '可选模型'}</span>
+        <input type="text" class="mdl-name" value="${esc(m.name || m.id)}" readonly title="${esc(m.id)}">
+        ${cur
+          ? '<button class="btn sm" disabled>当前</button><span class="state">使用中</span>'
+          : '<button class="btn sm mdl-use">切换</button><span class="state"></span>'}
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.mdl-use').forEach(btn => {
+      btn.onclick = () => {
+        const row = btn.closest('.acc-row');
+        const id = row.dataset.id;
+        Cloud.model = id;
+        localStorage.setItem('grader.model', id);
+        toast('已切换判分模型：' + id);
+        renderCloudCard();
+        refresh();
+      };
+    });
   } catch (e) {
-    sel.innerHTML = '<option value="">（云端暂无可用模型）</option>';
-    box.innerHTML += '<br><span style="color:var(--err)">' + esc(e.message) + '</span>';
+    hint.innerHTML = '<span style="color:var(--err)">连接云服务失败：' + esc(e.message) + '</span>';
+    info.innerHTML = '<div class="empty">暂无连接信息</div>';
+    list.innerHTML = '<div class="empty">云端暂无可用模型</div>';
   }
 }
+$('#btnReloadCloud').onclick = () => renderCloudCard();
 
 // ---------- 管理员：账号与密码管理 ----------
 let accData = { teachers: [], students: [], admin: '' };
