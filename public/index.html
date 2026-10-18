@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#ffffff">
-<title>AI 判分系统</title>
+<title>智慧判</title>
 <style>
   :root {
     --bg: #f5f6f8; --card: #ffffff; --border: #e4e7ec; --text: #1f2329;
@@ -113,6 +113,9 @@
     border-radius: 16px; box-shadow: 0 12px 32px rgba(16,24,40,.10); padding: 30px 28px 26px; }
   .login-card .brand { display: flex; align-items: center; gap: 9px; font-size: 19px; font-weight: 700; }
   .login-card .brand .dot { width: 11px; height: 11px; border-radius: 3px; background: var(--primary); }
+  .login-card .brand .mk { width: 30px; height: 30px; border-radius: 9px; flex: 0 0 auto;
+    background: linear-gradient(135deg, #3b6ef5, #6d8ffa); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 15px; }
   .login-card .sub { color: var(--muted); font-size: 13px; margin: 8px 0 22px; line-height: 1.7;
     border: 0; border-radius: 0; box-shadow: none; overflow: visible; }
   .login-card label { margin: 0 0 6px; }
@@ -253,8 +256,8 @@
 <!-- ================= 登录 ================= -->
 <div class="login-wrap" id="loginScreen">
   <div class="login-card">
-    <div class="brand"><span class="dot"></span>AI 判分系统</div>
-    <div class="sub" id="loginSub">请使用老师或学生账号登录</div>
+    <div class="brand"><span class="mk">智</span>智慧判</div>
+    <div class="sub" id="loginSub">智慧判 · 老师出题设置评分标准，学生提交答案，AI 自动判分</div>
     <div class="login-err" id="loginErr"></div>
     <div id="loginFields">
       <div class="fld">
@@ -304,7 +307,7 @@
 </div>
 
 <header id="appHeader" style="display:none">
-  <div class="logo"><span class="mk">AI</span>AI 判分系统</div>
+  <div class="logo"><span class="mk">智</span>智慧判</div>
   <nav>
     <button data-tab="teacher" class="active">出题</button>
     <button data-tab="grade">判分与确认</button>
