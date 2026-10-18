@@ -118,6 +118,14 @@
   .remember { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted);
     margin: 2px 0 4px; cursor: pointer; user-select: none; }
   .remember input { width: 15px; height: 15px; margin: 0; cursor: pointer; }
+  .acc-list { max-height: 320px; overflow: auto; border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px; margin-top: 8px; background: var(--panel, #fff); }
+  .acc-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-bottom: 1px dashed var(--border); }
+  .acc-row:last-child { border-bottom: none; }
+  .acc-row .idx { width: 92px; font-size: 13px; color: var(--muted); flex: 0 0 auto; }
+  .acc-row input { margin: 0; height: 34px; font-size: 14px; flex: 1 1 0; min-width: 90px; }
+  .acc-row .btn { flex: 0 0 auto; }
+  .acc-row .state { width: 54px; font-size: 12px; color: var(--ok, #0a7); flex: 0 0 auto; }
   .user-box { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
   .user-box .who { white-space: nowrap; }
   .user-box .who b { color: var(--text); font-weight: 600; }
@@ -155,7 +163,7 @@
     <button data-tab="grade">判分与确认</button>
     <button data-tab="student">学生端</button>
     <button data-tab="stats">判分对比</button>
-    <button data-tab="settings">设置</button>
+    <button data-tab="settings">账号设置</button>
   </nav>
   <div class="user-box" id="userBox" style="display:none">
     <span class="who" id="userWho"></span>
@@ -232,6 +240,28 @@
 
   <!-- ================= 设置 ================= -->
   <div id="tab-settings" style="display:none">
+    <!-- 管理员专用：账号与密码管理 -->
+    <div class="card" id="adminCard" style="display:none">
+      <h2>账号管理 <span class="hint">管理员可查看并修改教师、学生的账号和密码；改账号后该账号名下的题目与提交会一起迁移</span></h2>
+      <div class="summary-box" id="accHint">加载中…</div>
+
+      <label style="margin-top:14px"><b>教师账号</b>（<span id="accTeacherCount">0</span> 个）</label>
+      <div class="acc-list" id="accTeachers"></div>
+
+      <label style="margin-top:18px"><b>学生账号</b>（<span id="accStudentCount">0</span> 个）</label>
+      <input type="text" id="accSearch" placeholder="输入账号筛选，例如 2600">
+      <div class="acc-list" id="accStudents"></div>
+
+      <div class="mt">
+        <button class="btn ghost" id="btnReloadAcc">刷新列表</button>
+      </div>
+      <div style="margin-top:14px;font-size:13px;color:var(--muted);line-height:1.9">
+        · 账号 3–12 位字母或数字，不能与已有账号重复；密码不能为空，修改后立即生效。<br>
+        · 改名后旧账号会自动停用，原来的题目、提交记录会归到新账号下，不会丢数据。<br>
+        · 管理员账号固定为 <code>99999</code>，只能改密码，不能改名。
+      </div>
+    </div>
+
     <div class="card" id="cloudCard" style="display:none">
       <h2>云服务 <span class="hint">题目、提交和判分结果都存在云端，任何设备打开都是同一份数据</span></h2>
       <div id="cloudBox">加载中…</div>
@@ -289,11 +319,13 @@ let state = { questions: [], submissions: [], llmConfigured: false };
 let selQ = null; let lastSubId = null;
 
 // ================= 账号与登录 =================
-// 账号规则：教师 00000–00005，学生 26006–26200；每个账号的初始密码与账号相同。
-// 说明：账号表与校验都在前端完成，属于「页面权限隔离」，不是服务端鉴权。
+// 账号规则：教师 00000–00005，学生 26006–26200，管理员 99999；
+// 初始密码与账号相同（管理员 99999/99999）。管理员可在「账号设置」里改账号和密码，
+// 改名后的账号由服务端 accounts 表接管，这里只负责默认规则与页面显示。
 const AUTH = {
   teacher: { from: 0, to: 5 },
   student: { from: 26006, to: 26200 },
+  admin: '99999',
 };
 const SESSION_KEY = 'grader.session';
 const SESSION_TTL = 30 * 24 * 3600 * 1000; // 30 天内免重复登录（每次访问自动续期）
@@ -301,22 +333,36 @@ const SESSION_TTL = 30 * 24 * 3600 * 1000; // 30 天内免重复登录（每次�
 let session = null;
 
 function roleOf(acc) {
-  if (!/^\d{5}$/.test(acc)) return null;
-  const n = Number(acc);
+  const s = String(acc || '').trim();
+  if (s === AUTH.admin) return 'admin';
+  if (!/^\d{5}$/.test(s)) return null;
+  const n = Number(s);
   if (n >= AUTH.teacher.from && n <= AUTH.teacher.to) return 'teacher';
   if (n >= AUTH.student.from && n <= AUTH.student.to) return 'student';
   return null;
 }
 
-/** 校验账号密码，返回 session；失败抛错给登录框显示 */
-function checkLogin(acc, pwd) {
+/** 登录走服务端校验（管理员改过账号/密码后仍能登录） */
+async function checkLogin(acc, pwd) {
   const a = String(acc || '').trim();
   const p = String(pwd || '').trim();
   if (!a || !p) throw new Error('请输入账号和密码');
-  const role = roleOf(a);
-  if (!role) throw new Error('账号不存在（教师 00000–00005，学生 26006–26200）');
-  if (p !== a) throw new Error('密码错误');
-  return { account: a, role, name: role === 'teacher' ? '教师 ' + a : '学生 ' + a, ts: Date.now() };
+  let r;
+  try {
+    r = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account: a, password: p }),
+    }).then(async res => {
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || '登录失败');
+      return d;
+    });
+  } catch (e) {
+    // 网络异常时给一句人话，避免只显示 "Failed to fetch"
+    throw new Error(e.message === 'Failed to fetch' ? '连不上服务，请检查网络后重试' : e.message);
+  }
+  return { account: r.account, role: r.role, name: r.name || a, ts: Date.now() };
 }
 
 function readSession() {
@@ -328,8 +374,9 @@ function readSession() {
     const s = JSON.parse(raw || 'null');
     if (!s || !s.account || !s.ts) return null;
     if (Date.now() - s.ts > SESSION_TTL) return null;
-    const role = roleOf(s.account);
-    if (!role || role !== s.role) return null;
+    // 账号可能是管理员改过的（不再符合默认数字区间），这里只校验格式与角色，权限由服务端把关
+    if (!/^[0-9A-Za-z]{3,12}$/.test(s.account)) return null;
+    if (!['teacher', 'student', 'admin'].includes(s.role)) return null;
     // 滑动续期：只要还在用，登录状态就一直往后顺延，不会因为「关掉网页过了几天」被踢下线
     s.ts = Date.now();
     saveSession(s, persistent);
@@ -352,16 +399,20 @@ function clearSession() {
 }
 
 const isTeacher = () => !!session && session.role === 'teacher';
+const isAdmin = () => !!session && session.role === 'admin';
+const isStudent = () => !!session && session.role === 'student';
 
 /** 按角色控制可见页签，并给登录信息赋值 */
 function applyRole() {
-  const allow = isTeacher() ? ['teacher', 'grade', 'stats', 'settings'] : ['student'];
+  // 教师不再有「设置」：AI 配置与账号管理都归管理员 99999
+  const allow = isAdmin() ? ['settings'] : (isTeacher() ? ['teacher', 'grade', 'stats'] : ['student']);
   document.querySelectorAll('nav button').forEach(b => {
     b.style.display = allow.includes(b.dataset.tab) ? '' : 'none';
   });
   $('#userBox').style.display = '';
-  $('#userWho').innerHTML = '<b>' + esc(session.account) + '</b> · ' + (isTeacher() ? '教师' : '学生');
-  if (!isTeacher()) {
+  const roleText = isAdmin() ? '管理员' : (isTeacher() ? '教师' : '学生');
+  $('#userWho').innerHTML = '<b>' + esc(session.account) + '</b> · ' + roleText;
+  if (isStudent()) {
     $('#sName').value = session.account;
     $('#sName').readOnly = true;
     $('#studentHint').textContent = '当前登录账号 ' + session.account + '，提交后成绩记在该账号下';
@@ -394,7 +445,7 @@ async function enterApp(s) {
   $('#loginScreen').style.display = 'none';
   $('#appHeader').style.display = '';
   $('#appMain').style.display = '';
-  switchTab(isTeacher() ? 'teacher' : 'student');
+  switchTab(isAdmin() ? 'settings' : (isTeacher() ? 'teacher' : 'student'));
   await bootData();
 }
 
@@ -408,7 +459,7 @@ async function doLogin() {
   const btn = $('#btnLogin');
   btn.disabled = true; btn.textContent = '登录中…';
   try {
-    const s = checkLogin($('#loginAcc').value, $('#loginPwd').value);
+    const s = await checkLogin($('#loginAcc').value, $('#loginPwd').value);
     saveSession(s, $('#loginRemember').checked);
     await enterApp(s);
     $('#loginPwd').value = '';
@@ -653,6 +704,10 @@ const store = {
       try { model = await ensureModel(); } catch (e) { Cloud.error = llmErr(e); }
       let questions = (qs.data || []).map(mapQ);
       let rows = (subs.data || []).map(mapSub);
+      if (isAdmin()) {
+        // 管理员只做账号与设置，不需要拉题目/提交
+        return { questions: [], submissions: [], llmConfigured: !!model, llmModel: model, llmLabel: '云端 AI', cloud: true };
+      }
       if (isTeacher()) {
         questions = questions.filter(q => q.owner === session.account);
         const mine = new Set(questions.map(q => q.id));
@@ -760,7 +815,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   b.classList.add('active');
   ['teacher', 'grade', 'student', 'stats', 'settings'].forEach(t => $('#tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
   if (b.dataset.tab === 'stats') renderStats();
-  if (b.dataset.tab === 'settings') { loadAccess(); loadSettings(); }
+  if (b.dataset.tab === 'settings') { loadAccess(); loadSettings(); if (isAdmin()) loadAccountsAdmin(); }
 });
 
 // ---------- 数据加载 ----------
@@ -773,7 +828,9 @@ async function refresh() {
   } else {
     $('#llmBadge').innerHTML = state.llmConfigured
       ? '<span class="st on"></span>AI 已连接 · ' + esc(state.llmModel || '')
-      : '<span class="st off"></span>AI 未配置（点右上角「设置」）';
+      : (isAdmin()
+        ? '<span class="st off"></span>AI 未配置（在「账号设置」里配置）'
+        : '<span class="st off"></span>AI 未配置（请联系管理员）');
   }
   const banner = $('#llmBanner');
   if (!state.llmConfigured) {
@@ -781,8 +838,9 @@ async function refresh() {
     banner.innerHTML = Cloud.ready
       ? '<b>云端暂无可用模型</b>，现在提交答案无法判分。' + esc(Cloud.error || '')
       : '<b>尚未配置 AI 服务</b>，现在提交答案无法判分。' +
-        '<button class="btn sm" style="margin-left:12px" id="goSetBtn">去设置</button>';
-    if (!Cloud.ready) $('#goSetBtn').onclick = () => document.querySelector('nav button[data-tab="settings"]').click();
+        (isAdmin() ? '<button class="btn sm" style="margin-left:12px" id="goSetBtn">去配置</button>'
+                   : '<span class="m">（请联系管理员账号 99999 配置）</span>');
+    if (!Cloud.ready && isAdmin()) $('#goSetBtn').onclick = () => document.querySelector('nav button[data-tab="settings"]').click();
   } else {
     banner.style.display = 'none';
   }
@@ -792,7 +850,7 @@ async function refresh() {
 /** 学生端：只渲染当前账号自己的提交；先选教师，只看该教师给出的成绩 */
 function renderMySubs() {
   const card = $('#mySubsCard');
-  if (isTeacher()) { card.style.display = 'none'; return; }
+  if (!isStudent()) { card.style.display = 'none'; return; }
   const mine = state.submissions.filter(s => s.account ? s.account === session.account : s.studentName === session.account);
   card.style.display = '';
 
@@ -1018,8 +1076,7 @@ $('#btnSubmit').onclick = async () => {
   const answer = $('#sAns').value.trim();
   if (!questionId) return toast('没有可选题目');
   if (!state.llmConfigured) {
-    if (!Cloud.ready) document.querySelector('nav button[data-tab="settings"]').click();
-    return toast(Cloud.ready ? '云端暂无可用模型，请联系管理员' : '尚未配置 AI 服务，请先到「设置」页填写');
+    return toast(Cloud.ready ? '云端暂无可用模型，请联系管理员' : '尚未配置 AI 服务，请联系管理员账号 99999');
   }
   if (!studentName) return toast('请填写姓名');
   if (!answer) return toast('请填写答案');
@@ -1155,6 +1212,65 @@ async function renderCloudCard() {
     box.innerHTML += '<br><span style="color:var(--err)">' + esc(e.message) + '</span>';
   }
 }
+
+// ---------- 管理员：账号与密码管理 ----------
+let accData = { teachers: [], students: [], admin: '' };
+
+async function loadAccountsAdmin() {
+  if (!isAdmin()) return;
+  $('#adminCard').style.display = '';
+  const hint = $('#accHint');
+  hint.textContent = '加载中…';
+  try {
+    accData = await api('/api/accounts');
+    hint.innerHTML = '管理员 <b>' + esc(accData.admin || session.account) + '</b> · 教师 ' +
+      accData.teachers.length + ' 个 · 学生 ' + accData.students.length + ' 个';
+    $('#accTeacherCount').textContent = accData.teachers.length;
+    $('#accStudentCount').textContent = accData.students.length;
+    renderAccList('teachers');
+    renderAccList('students');
+  } catch (e) {
+    hint.innerHTML = '<span style="color:var(--err)">读取失败：' + esc(e.message) + '</span>';
+  }
+}
+
+function renderAccList(kind) {
+  const el = kind === 'teachers' ? $('#accTeachers') : $('#accStudents');
+  const kw = kind === 'students' ? String($('#accSearch').value || '').trim() : '';
+  const rows = (accData[kind] || []).filter(r => !kw || String(r.account).includes(kw));
+  if (!rows.length) { el.innerHTML = '<div class="empty">没有匹配的账号</div>'; return; }
+  el.innerHTML = rows.map(r => `<div class="acc-row" data-acc="${esc(r.account)}">
+      <span class="idx">${kind === 'teachers' ? '教师 · ' + (r.questions || 0) + ' 题' : '学生 · ' + (r.submissions || 0) + ' 份'}</span>
+      <input type="text" class="acc-acc" value="${esc(r.account)}" title="账号（3–12 位字母或数字）">
+      <input type="text" class="acc-pwd" value="${esc(r.password)}" title="密码">
+      <button class="btn sm acc-save">保存</button>
+      <span class="state"></span>
+    </div>`).join('');
+  el.querySelectorAll('.acc-save').forEach(btn => { btn.onclick = () => saveAccRow(btn.closest('.acc-row')); });
+}
+
+async function saveAccRow(row) {
+  const oldAccount = row.dataset.acc;
+  const account = row.querySelector('.acc-acc').value.trim();
+  const password = row.querySelector('.acc-pwd').value.trim();
+  const st = row.querySelector('.state');
+  if (!account || !password) { st.style.color = 'var(--err)'; st.textContent = '不能为空'; return; }
+  st.style.color = ''; st.textContent = '保存中';
+  try {
+    await api('/api/accounts/update', {
+      method: 'POST', body: JSON.stringify({ oldAccount, account, password }),
+    });
+    st.textContent = '已保存';
+    toast('账号 ' + oldAccount + ' 已更新');
+    await loadAccountsAdmin();
+  } catch (e) {
+    st.style.color = 'var(--err)'; st.textContent = '失败';
+    toast(e.message);
+  }
+}
+
+$('#btnReloadAcc').onclick = () => loadAccountsAdmin();
+$('#accSearch').oninput = () => renderAccList('students');
 
 async function loadSettings() {
   if (Cloud.ready) {

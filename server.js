@@ -28,17 +28,41 @@ const HOST = process.env.HOST || '0.0.0.0';
 let activePort = START_PORT;
 
 // ---------------- 账号与归属 ----------------
-// 与前端 AUTH 规则保持一致：教师 00000-00005，学生 26006-26200，密码=账号
+// 默认规则：教师 00000-00005，学生 26006-26200，密码=账号；管理员 99999/99999。
+// 管理员在「账号设置」里改过账号或密码后，改动存在 accounts 表（云）/ data/accounts.json（本机），
+// 覆盖默认规则；被改名后的旧账号会标记 disabled，不能再登录。
 const AUTH = { teacher: { from: 0, to: 5 }, student: { from: 26006, to: 26200 } };
+const ADMIN_ACCOUNT = '99999';
+const ADMIN_PASSWORD = '99999';
 const LEGACY_OWNER = '00000';   // 历史题目/提交的默认归属教师
 
-function roleOfAccount(acc) {
+/** 管理员改过的账号：account -> { account, password, role, disabled } */
+const accountsCache = new Map();
+const ACCOUNTS_FILE = path.join(DATA_DIR, 'accounts.json');
+
+function defaultAccounts() {
+  const out = [];
+  for (let i = AUTH.teacher.from; i <= AUTH.teacher.to; i++) out.push(String(i).padStart(5, '0'));
+  for (let i = AUTH.student.from; i <= AUTH.student.to; i++) out.push(String(i));
+  return out;
+}
+
+function roleByRule(acc) {
   const s = String(acc || '').trim();
+  if (s === ADMIN_ACCOUNT) return 'admin';
   if (!/^\d{5}$/.test(s)) return null;
   const n = Number(s);
   if (n >= AUTH.teacher.from && n <= AUTH.teacher.to) return 'teacher';
   if (n >= AUTH.student.from && n <= AUTH.student.to) return 'student';
   return null;
+}
+
+function roleOfAccount(acc) {
+  const s = String(acc || '').trim();
+  if (!s) return null;
+  const custom = accountsCache.get(s);
+  if (custom) return custom.disabled ? null : custom.role;
+  return roleByRule(s);
 }
 /** 从 X-Account 请求头取当前登录账号（沿用前端登录体系，服务端只做权限校验） */
 function accountOf(req) {
@@ -237,6 +261,87 @@ const Store = {
     return (rows || []).length;
   },
 };
+
+// ---------------- 账号表（管理员可改教师/学生账号与密码） ----------------
+async function loadAccounts() {
+  accountsCache.clear();
+  if (cloudOn()) {
+    try {
+      const rows = await cloudFetch('accounts?select=account,password,role,disabled');
+      (rows || []).forEach(r => accountsCache.set(String(r.account), {
+        account: String(r.account), password: String(r.password || ''), role: String(r.role || 'student'),
+        disabled: !!r.disabled,
+      }));
+    } catch (e) {
+      console.error('[accounts] 读取失败，按默认账号规则运行:', e.message);
+    }
+    return;
+  }
+  try {
+    const list = JSON.parse(fs.readFileSync(ACCOUNTS_FILE, 'utf8'));
+    (list || []).forEach(u => accountsCache.set(String(u.account), u));
+  } catch (_) {}
+}
+
+function persistAccountsLocal() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = ACCOUNTS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify([...accountsCache.values()], null, 2));
+  fs.renameSync(tmp, ACCOUNTS_FILE);
+}
+
+/** 写入一行账号（存在则更新，不存在则新增） */
+async function upsertAccountRow(rec) {
+  const row = { account: rec.account, password: rec.password, role: rec.role, disabled: !!rec.disabled };
+  if (cloudOn()) {
+    const exists = accountsCache.has(rec.account);
+    if (exists) {
+      await cloudFetch('accounts?account=eq.' + encodeURIComponent(rec.account), { method: 'PATCH', body: row });
+    } else {
+      await cloudFetch('accounts', { method: 'POST', headers: { Prefer: 'return=representation' }, body: row });
+    }
+  }
+  accountsCache.set(row.account, row);
+  if (!cloudOn()) persistAccountsLocal();
+}
+
+/** 账号改名时把名下的题目/提交一起迁到新账号，避免数据丢失 */
+async function migrateOwner(oldAccount, newAccount) {
+  if (oldAccount === newAccount) return;
+  if (cloudOn()) {
+    await cloudFetch('questions?owner_account=eq.' + encodeURIComponent(oldAccount), {
+      method: 'PATCH', body: { owner_account: newAccount },
+    });
+    await cloudFetch('submissions?account=eq.' + encodeURIComponent(oldAccount), {
+      method: 'PATCH', body: { account: newAccount, student_name: newAccount },
+    });
+    return;
+  }
+  db.questions.forEach(q => { if (ownerOf(q) === oldAccount) q.ownerAccount = newAccount; });
+  db.submissions.forEach(s => {
+    if ((s.account || s.studentName) === oldAccount) { s.account = newAccount; s.studentName = newAccount; }
+  });
+  saveDb();
+}
+
+/** 登录校验：自定义账号优先，其余走默认规则（密码=账号） */
+function verifyLogin(acc, pwd) {
+  const a = String(acc || '').trim();
+  const p = String(pwd || '').trim();
+  if (!a || !p) return { error: '请输入账号和密码' };
+  const custom = accountsCache.get(a);
+  if (custom) {
+    if (custom.disabled) return { error: '该账号已停用（已被管理员改名）' };
+    if (custom.password !== p) return { error: '密码错误' };
+    return { account: a, role: custom.role };
+  }
+  const role = roleByRule(a);
+  if (!role) return { error: '账号不存在' };
+  if (role === 'admin') {
+    return p === ADMIN_PASSWORD ? { account: a, role } : { error: '密码错误' };
+  }
+  return p === a ? { account: a, role } : { error: '密码错误' };
+}
 
 // ---------------- 设置 ----------------
 let settings = { llm: null }; // { baseUrl, endpoint, apiKey, model, stream, provider }
@@ -539,11 +644,90 @@ function llmInfo() {
 
 // ---------------- API 路由 ----------------
 async function handleApi(req, res, pathname) {
+  // ---- 登录（服务端校验账号密码，支持管理员改过的账号） ----
+  if (req.method === 'POST' && pathname === '/api/login') {
+    const b = await readBody(req, 8 * 1024);
+    const r = verifyLogin(b.account, b.password);
+    if (r.error) return sendJson(res, 401, { error: r.error });
+    const label = r.role === 'admin' ? '管理员 ' : (r.role === 'teacher' ? '教师 ' : '学生 ');
+    return sendJson(res, 200, { account: r.account, role: r.role, name: label + r.account });
+  }
+
+  // ---- 账号管理（仅管理员 99999） ----
+  if (req.method === 'GET' && pathname === '/api/accounts') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'admin') return sendJson(res, 403, { error: '只有管理员账号可以管理账号' });
+    let qs, subs;
+    try { qs = await Store.questions(); subs = await Store.submissions(); }
+    catch (e) { return sendJson(res, 502, { error: '云端数据读取失败：' + e.message }); }
+    const qCount = new Map();
+    qs.forEach(q => qCount.set(ownerOf(q), (qCount.get(ownerOf(q)) || 0) + 1));
+    const sCount = new Map();
+    subs.forEach(s => { const k = s.account || s.studentName; sCount.set(k, (sCount.get(k) || 0) + 1); });
+
+    const build = role => {
+      const seen = new Set();
+      const out = [];
+      const push = a => {
+        if (!a || seen.has(a)) return;
+        seen.add(a);
+        const c = accountsCache.get(a);
+        if (c && c.disabled) return;
+        out.push({
+          account: a,
+          password: c ? c.password : a,
+          custom: !!c,
+          questions: role === 'teacher' ? (qCount.get(a) || 0) : undefined,
+          submissions: sCount.get(a) || 0,
+        });
+      };
+      if (role === 'teacher') { for (let i = AUTH.teacher.from; i <= AUTH.teacher.to; i++) push(String(i).padStart(5, '0')); }
+      else { for (let i = AUTH.student.from; i <= AUTH.student.to; i++) push(String(i)); }
+      [...accountsCache.values()].forEach(c => { if (c.role === role) push(c.account); });
+      return out.sort((a, b) => String(a.account).localeCompare(String(b.account)));
+    };
+    return sendJson(res, 200, { teachers: build('teacher'), students: build('student'), admin: ADMIN_ACCOUNT });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/accounts/update') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'admin') return sendJson(res, 403, { error: '只有管理员账号可以修改账号' });
+    const b = await readBody(req, 8 * 1024);
+    const oldAccount = String(b.oldAccount || '').trim();
+    const account = String(b.account || oldAccount).trim();
+    const password = String(b.password == null ? '' : b.password).trim();
+    const role = roleOfAccount(oldAccount);
+    if (!role) return sendJson(res, 404, { error: '账号不存在：' + oldAccount });
+    if (!/^[0-9A-Za-z]{3,12}$/.test(account)) return sendJson(res, 400, { error: '账号只能由 3–12 位字母或数字组成' });
+    if (role === 'admin' && account !== ADMIN_ACCOUNT) return sendJson(res, 400, { error: '管理员账号固定为 ' + ADMIN_ACCOUNT + '，不能改名' });
+    if (account !== oldAccount) {
+      if (account === ADMIN_ACCOUNT) return sendJson(res, 400, { error: '该账号为管理员保留账号' });
+      if (roleOfAccount(account)) return sendJson(res, 409, { error: '账号 ' + account + ' 已被占用' });
+    }
+    const pwd = password || (accountsCache.has(oldAccount) ? accountsCache.get(oldAccount).password : oldAccount);
+    if (!pwd) return sendJson(res, 400, { error: '密码不能为空' });
+    try {
+      if (account !== oldAccount) {
+        await upsertAccountRow({ account, password: pwd, role, disabled: false });
+        await upsertAccountRow({ account: oldAccount, password: '', role, disabled: true });
+        await migrateOwner(oldAccount, account);
+      } else {
+        await upsertAccountRow({ account, password: pwd, role, disabled: false });
+      }
+    } catch (e) {
+      return sendJson(res, 502, { error: '保存失败：' + e.message });
+    }
+    return sendJson(res, 200, { ok: true, account, role });
+  }
+
   if (req.method === 'GET' && pathname === '/api/state') {
     const acc = accountOf(req);
     if (!acc) return sendJson(res, 401, { error: '请先登录' });
     const cfg = resolveLLM();
-    const isTeacher = roleOfAccount(acc) === 'teacher';
+    const role = roleOfAccount(acc);
+    const isTeacher = role === 'teacher';
     // 教师：只返回自己出的题目和自己的判分记录；学生：可看到全部题目，只返回自己的提交
     let questions, submissions;
     try {
@@ -552,7 +736,11 @@ async function handleApi(req, res, pathname) {
     } catch (e) {
       return sendJson(res, 502, { error: '云端数据读取失败：' + e.message + '（检查本机网络或 data/cloud.json）' });
     }
-    if (isTeacher) {
+    if (role === 'admin') {
+      // 管理员只做账号与 AI 设置，不参与出题判分
+      questions = [];
+      submissions = [];
+    } else if (isTeacher) {
       questions = questions.filter(q => ownerOf(q) === acc);
       const ids = new Set(questions.map(q => q.id));
       submissions = submissions.filter(s => ids.has(s.questionId));
@@ -564,7 +752,7 @@ async function handleApi(req, res, pathname) {
       // owner 与云端 owner_account 对齐，前端统一读 owner
       questions: questions.map(q => Object.assign({}, q, { owner: ownerOf(q) })),
       submissions,
-      viewer: { account: acc, role: isTeacher ? 'teacher' : 'student' },
+      viewer: { account: acc, role: role },
       storage: cloudOn() ? 'cloud' : 'local',
       llmConfigured: !!cfg,
       llmLabel: cfg ? cfg.label : '',
@@ -596,6 +784,9 @@ async function handleApi(req, res, pathname) {
   }
 
   if (req.method === 'POST' && pathname === '/api/settings') {
+    const who = accountOf(req);
+    if (!who) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(who) !== 'admin') return sendJson(res, 403, { error: '只有管理员账号可以修改 AI 服务设置' });
     const b = await readBody(req, 64 * 1024);
     const baseUrl = String(b.baseUrl || '').trim();
     if (!baseUrl) {           // 清空 = 恢复自动检测
@@ -914,4 +1105,9 @@ function start(port, attempt) {
 loadDb();
 loadSettings();
 loadCloudCfg();
-start(START_PORT, 0);
+(async () => {
+  try { await loadAccounts(); }
+  catch (e) { console.error('[accounts] 加载失败，按默认账号规则运行:', e.message); }
+  if (accountsCache.size) console.log('[账号] 已加载自定义账号 ' + accountsCache.size + ' 条');
+  start(START_PORT, 0);
+})();
