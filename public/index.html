@@ -445,7 +445,8 @@
       <div class="acc-list" id="cloudInfo"></div>
 
       <label style="margin-top:18px"><b>判分模型</b>（<span id="cloudModelCount">0</span> 个可用，免 API Key，由云服务统一提供）</label>
-      <div class="acc-list" id="cloudModels"></div>
+      <select id="cloudModelSel"></select>
+      <div id="cloudModelNote" style="font-size:12px;color:var(--muted);margin-top:8px;line-height:1.8"></div>
 
       <div class="mt">
         <button class="btn ghost" id="btnReloadCloud">刷新状态</button>
@@ -1537,11 +1538,13 @@ function cloudInfoRow(label, value) {
 }
 
 async function renderCloudCard() {
-  const hint = $('#cloudHint'), info = $('#cloudInfo'), list = $('#cloudModels');
+  const hint = $('#cloudHint'), info = $('#cloudInfo'), sel = $('#cloudModelSel'), note = $('#cloudModelNote');
   const cfg = window.CLOUD_PUBLIC_CONFIG || {};
   hint.textContent = '正在读取云端状态…';
   info.innerHTML = '<div class="empty">加载中…</div>';
-  list.innerHTML = '<div class="empty">加载中…</div>';
+  sel.innerHTML = '<option value="">加载中…</option>';
+  sel.disabled = true;
+  note.textContent = '';
   try {
     await ensureModel();
     hint.innerHTML = '<b>已连接云服务</b> · 可用判分模型 ' + Cloud.models.length + ' 个 · 数据多设备共享';
@@ -1553,34 +1556,29 @@ async function renderCloudCard() {
     ].join('');
     $('#cloudModelCount').textContent = Cloud.models.length;
     if (!Cloud.models.length) {
-      list.innerHTML = '<div class="empty">云端暂无可用模型</div>';
+      sel.innerHTML = '<option value="">云端暂无可用模型</option>';
+      note.innerHTML = '<span style="color:var(--err)">云端暂无可用模型，提交答案将无法判分</span>';
       return;
     }
-    list.innerHTML = Cloud.models.map(m => {
-      const cur = m.id === Cloud.model;
-      return `<div class="acc-row" data-id="${esc(m.id)}">
-        <span class="idx">${cur ? '当前使用' : '可选模型'}</span>
-        <input type="text" class="mdl-name" value="${esc(m.name || m.id)}" readonly title="${esc(m.id)}">
-        ${cur
-          ? '<button class="btn sm" disabled>当前</button><span class="state">使用中</span>'
-          : '<button class="btn sm mdl-use">切换</button><span class="state"></span>'}
-      </div>`;
-    }).join('');
-    list.querySelectorAll('.mdl-use').forEach(btn => {
-      btn.onclick = () => {
-        const row = btn.closest('.acc-row');
-        const id = row.dataset.id;
-        Cloud.model = id;
-        localStorage.setItem('grader.model', id);
-        toast('已切换判分模型：' + id);
-        renderCloudCard();
-        refresh();
-      };
-    });
+    // 下拉菜单：当前模型在下拉里直接可见，选中即切换
+    sel.innerHTML = Cloud.models.map(m =>
+      `<option value="${esc(m.id)}"${m.id === Cloud.model ? ' selected' : ''}>${esc(m.name || m.id)}</option>`).join('');
+    sel.disabled = false;
+    const cur = Cloud.models.find(m => m.id === Cloud.model);
+    note.textContent = '当前使用：「' + ((cur && (cur.name || cur.id)) || Cloud.model) + '」· 切换后立即生效，只影响这个设备上的判分';
+    sel.onchange = () => {
+      const id = sel.value;
+      Cloud.model = id;
+      localStorage.setItem('grader.model', id);
+      toast('已切换判分模型：' + id);
+      renderCloudCard();
+      refresh();
+    };
   } catch (e) {
     hint.innerHTML = '<span style="color:var(--err)">连接云服务失败：' + esc(e.message) + '</span>';
     info.innerHTML = '<div class="empty">暂无连接信息</div>';
-    list.innerHTML = '<div class="empty">云端暂无可用模型</div>';
+    sel.innerHTML = '<option value="">云端暂无可用模型</option>';
+    note.textContent = '';
   }
 }
 $('#btnReloadCloud').onclick = () => { renderCloudCard(); loadAccess(); };
