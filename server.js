@@ -331,16 +331,16 @@ function verifyLogin(acc, pwd) {
   if (!a || !p) return { error: '请输入账号和密码' };
   const custom = accountsCache.get(a);
   if (custom) {
-    if (custom.disabled) return { error: '该账号已停用（已被管理员改名）' };
-    if (custom.password !== p) return { error: '密码错误' };
+    if (custom.disabled) return { error: '该账号已停用（可能被管理员改名），请联系管理员 99999' };
+    if (custom.password !== p) return { error: '密码错误，请检查后重新输入' };
     return { account: a, role: custom.role };
   }
   const role = roleByRule(a);
-  if (!role) return { error: '账号不存在' };
+  if (!role) return { error: '账号不存在，请检查账号是否正确' };
   if (role === 'admin') {
-    return p === ADMIN_PASSWORD ? { account: a, role } : { error: '密码错误' };
+    return p === ADMIN_PASSWORD ? { account: a, role } : { error: '密码错误，请检查后重新输入' };
   }
-  return p === a ? { account: a, role } : { error: '密码错误' };
+  return p === a ? { account: a, role } : { error: '密码错误，请检查后重新输入' };
 }
 
 // ---------------- 密码重置申请（忘记密码） ----------------

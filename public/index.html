@@ -535,6 +535,10 @@ async function enterApp(s) {
 $('#btnLogin').onclick = doLogin;
 $('#loginPwd').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
 $('#loginAcc').addEventListener('keydown', e => { if (e.key === 'Enter') $('#loginPwd').focus(); });
+// 重新输入时清掉上一条错误提示
+['#loginAcc', '#loginPwd'].forEach(sel => {
+  $(sel).addEventListener('input', () => { const el = $('#loginErr'); el.style.display = 'none'; el.textContent = ''; });
+});
 
 async function doLogin() {
   const err = $('#loginErr');
@@ -548,7 +552,7 @@ async function doLogin() {
     $('#loginPwd').value = '';
   } catch (e) {
     err.textContent = e.message;
-    err.style.display = '';
+    err.style.display = 'block';
   }
   btn.disabled = false; btn.textContent = '登录';
 }
@@ -557,7 +561,7 @@ async function doLogin() {
 function fgError(msg) {
   const el = $('#loginErr');
   if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
-  el.textContent = msg; el.style.display = '';
+  el.textContent = msg; el.style.display = 'block';
 }
 function showForgot(on) {
   $('#loginFields').style.display = on ? 'none' : '';
@@ -614,7 +618,7 @@ $('#btnPwdCancel').onclick = () => { $('#pwdModal').style.display = 'none'; };
 $('#btnPwdSave').onclick = async () => {
   const err = $('#pwdErr');
   const oldP = $('#pwdOld').value, n1 = $('#pwdNew').value, n2 = $('#pwdNew2').value;
-  const fail = m => { err.textContent = m; err.style.display = ''; };
+  const fail = m => { err.textContent = m; err.style.display = 'block'; };
   if (!oldP) return fail('请输入当前密码');
   if (n1.length < 4) return fail('新密码至少 4 位');
   if (n1 !== n2) return fail('两次输入的新密码不一致');
