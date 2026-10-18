@@ -343,6 +343,93 @@ function verifyLogin(acc, pwd) {
   return p === a ? { account: a, role } : { error: '密码错误' };
 }
 
+// ---------------- 密码重置申请（忘记密码） ----------------
+// 流程：教师/学生提交申请 → 管理员在「账号设置」生成 6 位验证码（5 分钟有效）→
+// 学生/老师用验证码 + 新密码自助重置；验证码过期则该申请作废，需重新提交申请。
+const RESET_TTL_MS = 5 * 60 * 1000;
+const REQUESTS_FILE = path.join(DATA_DIR, 'password-requests.json');
+let localRequests = [];
+let localRequestSeq = 0;
+
+function loadLocalRequests() {
+  try { localRequests = JSON.parse(fs.readFileSync(REQUESTS_FILE, 'utf8')) || []; } catch (_) { localRequests = []; }
+  if (!Array.isArray(localRequests)) localRequests = [];
+  localRequestSeq = localRequests.reduce((m, r) => Math.max(m, Number(r.id) || 0), 0);
+}
+function saveLocalRequests() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const tmp = REQUESTS_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(localRequests, null, 2));
+  fs.renameSync(tmp, REQUESTS_FILE);
+}
+
+function mapRequest(r) {
+  return {
+    id: String(r.id),
+    account: String(r.account || ''),
+    role: String(r.role || 'student'),
+    status: String(r.status || 'pending'),
+    code: r.code || '',
+    createdAt: r.created_at || r.createdAt || null,
+    expiresAt: r.expires_at || r.expiresAt || null,
+  };
+}
+
+async function listRequests() {
+  if (cloudOn()) {
+    const rows = await cloudFetch('password_requests?select=*&order=created_at.desc&limit=100');
+    return (rows || []).map(mapRequest);
+  }
+  return localRequests.slice().sort((a, b) => (b.id > a.id ? 1 : -1)).map(mapRequest);
+}
+
+async function insertRequest(rec) {
+  if (cloudOn()) {
+    const rows = await cloudFetch('password_requests', {
+      method: 'POST', headers: { Prefer: 'return=representation' },
+      body: { account: rec.account, role: rec.role, status: rec.status, code: rec.code || null, expires_at: rec.expiresAt || null },
+    });
+    return mapRequest(rows[0]);
+  }
+  const row = Object.assign({ id: ++localRequestSeq, created_at: new Date().toISOString() }, rec);
+  localRequests.push(row);
+  saveLocalRequests();
+  return mapRequest(row);
+}
+
+async function patchRequest(id, patch) {
+  const body = {};
+  if (patch.status !== undefined) body.status = patch.status;
+  if (patch.code !== undefined) body.code = patch.code;
+  if (patch.expiresAt !== undefined) body.expires_at = patch.expiresAt;
+  body.updated_at = new Date().toISOString();
+  if (cloudOn()) {
+    await cloudFetch('password_requests?id=eq.' + encodeURIComponent(id), { method: 'PATCH', body });
+    return;
+  }
+  const row = localRequests.find(r => String(r.id) === String(id));
+  if (!row) return;
+  if (patch.status !== undefined) row.status = patch.status;
+  if (patch.code !== undefined) row.code = patch.code;
+  if (patch.expiresAt !== undefined) row.expires_at = patch.expiresAt;
+  row.updated_at = body.updated_at;
+  saveLocalRequests();
+}
+
+const isExpired = r => !!r.expiresAt && new Date(r.expiresAt).getTime() < Date.now();
+const requestView = r => ({
+  id: r.id, account: r.account, role: r.role, status: r.status, code: r.code,
+  createdAt: r.createdAt, expiresAt: r.expiresAt,
+  remainingSec: r.expiresAt ? Math.max(0, Math.round((new Date(r.expiresAt).getTime() - Date.now()) / 1000)) : 0,
+});
+
+/** 设置/修改密码（统一走 accounts 表，覆盖默认规则） */
+async function setPassword(account, password) {
+  const role = roleOfAccount(account);
+  if (!role) throw new Error('账号不存在');
+  await upsertAccountRow({ account, password, role, disabled: false });
+}
+
 // ---------------- 设置 ----------------
 let settings = { llm: null }; // { baseUrl, endpoint, apiKey, model, stream, provider }
 
@@ -651,6 +738,115 @@ async function handleApi(req, res, pathname) {
     if (r.error) return sendJson(res, 401, { error: r.error });
     const label = r.role === 'admin' ? '管理员 ' : (r.role === 'teacher' ? '教师 ' : '学生 ');
     return sendJson(res, 200, { account: r.account, role: r.role, name: label + r.account });
+  }
+
+  // ---- 密码：自助修改 / 忘记密码（申请 → 验证码 → 重置） ----
+  const pwdCheck = p => {
+    const s = String(p || '');
+    if (s.length < 4 || s.length > 32) return '新密码需为 4–32 个字符';
+    return '';
+  };
+
+  if (req.method === 'POST' && pathname === '/api/password/change') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    const b = await readBody(req, 8 * 1024);
+    const oldPwd = String(b.oldPassword || '');
+    const newPwd = String(b.newPassword || '');
+    const v = verifyLogin(acc, oldPwd);
+    if (v.error) return sendJson(res, 403, { error: '原密码不正确' });
+    const pe = pwdCheck(newPwd);
+    if (pe) return sendJson(res, 400, { error: pe });
+    if (newPwd === oldPwd) return sendJson(res, 400, { error: '新密码不能和原密码相同' });
+    try { await setPassword(acc, newPwd); }
+    catch (e) { return sendJson(res, 502, { error: '保存失败：' + e.message }); }
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/password/forgot') {
+    const b = await readBody(req, 8 * 1024);
+    const account = String(b.account || '').trim();
+    const role = roleOfAccount(account);
+    if (!role) return sendJson(res, 404, { error: '账号不存在，请核对后再试' });
+    if (role === 'admin') return sendJson(res, 400, { error: '管理员请登录后在「账号设置」里修改密码' });
+    let all;
+    try { all = await listRequests(); }
+    catch (e) { return sendJson(res, 502, { error: '申请提交失败：' + e.message }); }
+    const active = all.find(r => r.account === account && (r.status === 'pending' || (r.status === 'issued' && !isExpired(r))));
+    if (active) return sendJson(res, 200, { ok: true, reused: true, request: requestView(active) });
+    let created;
+    try { created = await insertRequest({ account, role, status: 'pending', code: '', expiresAt: null }); }
+    catch (e) { return sendJson(res, 502, { error: '申请提交失败：' + e.message }); }
+    return sendJson(res, 200, { ok: true, request: requestView(created) });
+  }
+
+  if (req.method === 'GET' && pathname === '/api/password/requests') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'admin') return sendJson(res, 403, { error: '只有管理员可以查看密码重置申请' });
+    let all;
+    try { all = await listRequests(); }
+    catch (e) { return sendJson(res, 502, { error: '读取失败：' + e.message }); }
+    for (const r of all) {
+      if (r.status === 'issued' && isExpired(r)) { r.status = 'expired'; await patchRequest(r.id, { status: 'expired' }); }
+    }
+    return sendJson(res, 200, {
+      active: all.filter(r => r.status === 'pending' || r.status === 'issued').map(requestView),
+      recent: all.filter(r => r.status === 'used' || r.status === 'expired').slice(0, 10).map(requestView),
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/password/issue') {
+    const acc = accountOf(req);
+    if (!acc) return sendJson(res, 401, { error: '请先登录' });
+    if (roleOfAccount(acc) !== 'admin') return sendJson(res, 403, { error: '只有管理员可以生成验证码' });
+    const b = await readBody(req, 8 * 1024);
+    const id = String(b.id || '');
+    const all = await listRequests();
+    const r = all.find(x => String(x.id) === id);
+    if (!r) return sendJson(res, 404, { error: '申请不存在' });
+    if (r.status === 'used') return sendJson(res, 400, { error: '该申请已使用完成' });
+    if (r.status === 'issued' && !isExpired(r)) {
+      return sendJson(res, 200, { ok: true, reused: true, code: r.code, expiresAt: r.expiresAt, remainingSec: requestView(r).remainingSec });
+    }
+    if (r.status === 'issued' && isExpired(r)) {
+      await patchRequest(r.id, { status: 'expired' });
+      return sendJson(res, 400, { error: '验证码已过期，需要让对方重新提交申请' });
+    }
+    if (r.status !== 'pending') return sendJson(res, 400, { error: '该申请状态不可生成验证码' });
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + RESET_TTL_MS).toISOString();
+    await patchRequest(r.id, { status: 'issued', code, expiresAt });
+    return sendJson(res, 200, { ok: true, code, expiresAt, remainingSec: Math.round(RESET_TTL_MS / 1000), account: r.account });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/password/reset') {
+    const b = await readBody(req, 8 * 1024);
+    const account = String(b.account || '').trim();
+    const code = String(b.code || '').trim();
+    const newPwd = String(b.password || '');
+    if (!account || !code) return sendJson(res, 400, { error: '请填写账号和验证码' });
+    const pe = pwdCheck(newPwd);
+    if (pe) return sendJson(res, 400, { error: pe });
+    let all;
+    try { all = await listRequests(); }
+    catch (e) { return sendJson(res, 502, { error: '重置失败：' + e.message }); }
+    const mine = all.filter(r => r.account === account);
+    const hit = mine.find(r => r.status === 'issued' && r.code === code && !isExpired(r));
+    if (!hit) {
+      const expiredSame = mine.find(r => r.code && r.code === code && isExpired(r));
+      const hasIssued = mine.some(r => r.status === 'issued');
+      return sendJson(res, 400, {
+        error: expiredSame
+          ? '验证码已过期（有效期 5 分钟），请重新提交申请'
+          : (hasIssued ? '验证码不正确，请核对管理员发来的 6 位数字'
+                       : '还没有生成验证码或申请已失效，请重新提交申请'),
+      });
+    }
+    try { await setPassword(account, newPwd); }
+    catch (e) { return sendJson(res, 502, { error: '保存失败：' + e.message }); }
+    await patchRequest(hit.id, { status: 'used' });
+    return sendJson(res, 200, { ok: true, account });
   }
 
   // ---- 账号管理（仅管理员 99999） ----
@@ -1105,6 +1301,7 @@ function start(port, attempt) {
 loadDb();
 loadSettings();
 loadCloudCfg();
+loadLocalRequests();
 (async () => {
   try { await loadAccounts(); }
   catch (e) { console.error('[accounts] 加载失败，按默认账号规则运行:', e.message); }

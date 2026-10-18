@@ -126,6 +126,21 @@
   .acc-row input { margin: 0; height: 34px; font-size: 14px; flex: 1 1 0; min-width: 90px; }
   .acc-row .btn { flex: 0 0 auto; }
   .acc-row .state { width: 54px; font-size: 12px; color: var(--ok, #0a7); flex: 0 0 auto; }
+  .forgot-link { text-align: center; margin-top: 12px; font-size: 13px; }
+  .forgot-link a { color: #2563eb; text-decoration: none; }
+  .forgot-head { font-weight: 600; margin: 16px 0 10px; font-size: 14px; }
+  .modal { position: fixed; inset: 0; background: rgba(17, 24, 39, .38); display: flex;
+    align-items: center; justify-content: center; z-index: 60; padding: 20px; }
+  .modal-card { background: #fff; border-radius: 14px; padding: 22px; width: 100%; max-width: 420px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .18); }
+  .modal-card h2 { margin: 0 0 14px; font-size: 17px; }
+  .modal-card .fld { margin-bottom: 12px; }
+  .req-row { display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px dashed var(--border);
+    font-size: 13px; flex-wrap: wrap; }
+  .req-row:last-child { border-bottom: none; }
+  .req-row .who { font-weight: 600; min-width: 84px; }
+  .req-row .meta { color: var(--muted); font-size: 12px; }
+  .req-row .code { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 700; letter-spacing: 1px; color: #b45309; }
   .user-box { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
   .user-box .who { white-space: nowrap; }
   .user-box .who b { color: var(--text); font-weight: 600; }
@@ -138,20 +153,49 @@
     <div class="brand"><span class="dot"></span>AI 判分系统</div>
     <div class="sub" id="loginSub">请使用老师或学生账号登录</div>
     <div class="login-err" id="loginErr"></div>
-    <div class="fld">
-      <label><b>账号</b></label>
-      <input type="text" id="loginAcc" inputmode="numeric" maxlength="5" autocomplete="username" placeholder="请输入 5 位账号">
+    <div id="loginFields">
+      <div class="fld">
+        <label><b>账号</b></label>
+        <input type="text" id="loginAcc" inputmode="numeric" maxlength="12" autocomplete="username" placeholder="教师/学生账号，或管理员 99999">
+      </div>
+      <div class="fld">
+        <label><b>密码</b></label>
+        <input type="password" id="loginPwd" maxlength="32" autocomplete="current-password" placeholder="请输入密码">
+      </div>
+      <label class="remember"><input type="checkbox" id="loginRemember" checked> 记住我（这台设备 30 天内免登录）</label>
+      <button class="btn" id="btnLogin">登录</button>
+      <div class="forgot-link" id="forgotEntry"><a href="javascript:void(0)" id="lnkForgot">忘记密码？</a></div>
     </div>
-    <div class="fld">
-      <label><b>密码</b></label>
-      <input type="password" id="loginPwd" maxlength="5" autocomplete="current-password" placeholder="请输入密码">
+
+    <!-- 忘记密码：提交申请 → 管理员发验证码 → 用验证码重置 -->
+    <div id="forgotPanel" style="display:none">
+      <div class="forgot-head">找回密码</div>
+      <div class="summary-box" id="forgotTip">忘记密码请联系管理员（账号 99999）申请重置：先点「提交申请」，管理员生成验证码后告诉你，再用验证码设置新密码。验证码有效期 5 分钟，过期需重新申请。</div>
+      <div class="fld">
+        <label><b>账号</b></label>
+        <input type="text" id="fgAcc" maxlength="12" placeholder="你的教师/学生账号">
+      </div>
+      <button class="btn ghost" id="btnForgotApply">① 提交重置申请</button>
+      <div class="fld" style="margin-top:14px">
+        <label><b>验证码</b>（管理员发给你的 6 位数字）</label>
+        <input type="text" id="fgCode" maxlength="6" placeholder="6 位验证码">
+      </div>
+      <div class="fld">
+        <label><b>新密码</b>（4–32 位）</label>
+        <input type="password" id="fgPwd" maxlength="32" placeholder="设置新密码">
+      </div>
+      <div class="fld">
+        <label><b>确认新密码</b></label>
+        <input type="password" id="fgPwd2" maxlength="32" placeholder="再输一次">
+      </div>
+      <button class="btn" id="btnForgotReset">② 用验证码重置密码</button>
+      <div class="forgot-link"><a href="javascript:void(0)" id="lnkBackLogin">返回登录</a></div>
     </div>
-    <label class="remember"><input type="checkbox" id="loginRemember" checked> 记住我（这台设备 30 天内免登录）</label>
-    <button class="btn" id="btnLogin">登录</button>
     <div class="login-tip">
+      <b>管理员</b>：99999 / 99999 &nbsp;·&nbsp; 账号管理、AI 配置<br>
       <b>教师账号</b>：00000 – 00005 &nbsp;·&nbsp; 可出题、判分与确认<br>
       <b>学生账号</b>：26006 – 26200 &nbsp;·&nbsp; 仅可进入学生端提交答案<br>
-      初始密码与账号相同，登录后请勿转告他人。
+      初始密码与账号相同，登录后可在右上角「修改密码」自行更改。
     </div>
   </div>
 </div>
@@ -167,6 +211,7 @@
   </nav>
   <div class="user-box" id="userBox" style="display:none">
     <span class="who" id="userWho"></span>
+    <button class="btn ghost sm" id="btnPwd">修改密码</button>
     <button class="btn ghost sm" id="btnLogout">退出</button>
   </div>
   <div class="llm-badge" id="llmBadge"></div>
@@ -262,6 +307,20 @@
       </div>
     </div>
 
+    <!-- 管理员专用：密码重置申请 -->
+    <div class="card" id="pwdReqCard" style="display:none">
+      <h2>密码重置申请 <span class="hint">教师/学生忘记密码时在登录页提交申请；你生成验证码后发给对方，5 分钟内有效</span></h2>
+      <div id="pwdReqBox">加载中…</div>
+      <div class="mt">
+        <button class="btn ghost" id="btnReloadReq">刷新申请</button>
+      </div>
+      <div style="margin-top:14px;font-size:13px;color:var(--muted);line-height:1.9">
+        · 点「生成验证码」得到 6 位数字，把它告诉申请人（当面、微信等），对方在登录页「忘记密码」里填入即可自行设置新密码。<br>
+        · 验证码有效期 <b>5 分钟</b>；过期后该申请作废，需对方重新提交申请，你再生成新的验证码。<br>
+        · 如果你想直接帮对方改，也可以在下方「账号管理」里修改密码。
+      </div>
+    </div>
+
     <div class="card" id="cloudCard" style="display:none">
       <h2>云服务 <span class="hint">题目、提交和判分结果都存在云端，任何设备打开都是同一份数据</span></h2>
       <div id="cloudBox">加载中…</div>
@@ -311,6 +370,30 @@
   </div>
 </main>
 <div class="toast" id="toast"></div>
+
+<!-- 修改密码弹窗 -->
+<div class="modal" id="pwdModal" style="display:none">
+  <div class="modal-card">
+    <h2>修改密码 <span class="hint">改完后下次请用新密码登录</span></h2>
+    <div class="login-err" id="pwdErr"></div>
+    <div class="fld">
+      <label><b>当前密码</b></label>
+      <input type="password" id="pwdOld" maxlength="32" placeholder="输入现在使用的密码">
+    </div>
+    <div class="fld">
+      <label><b>新密码</b>（4–32 位）</label>
+      <input type="password" id="pwdNew" maxlength="32" placeholder="设置新密码">
+    </div>
+    <div class="fld">
+      <label><b>确认新密码</b></label>
+      <input type="password" id="pwdNew2" maxlength="32" placeholder="再输一次">
+    </div>
+    <div class="mt">
+      <button class="btn" id="btnPwdSave">保存</button>
+      <button class="btn ghost" id="btnPwdCancel">取消</button>
+    </div>
+  </div>
+</div>
 
 <script src="cloud-config.js"></script>
 <script>
@@ -469,6 +552,82 @@ async function doLogin() {
   }
   btn.disabled = false; btn.textContent = '登录';
 }
+
+// ---------- 忘记密码：申请 → 管理员发验证码 → 自助重置 ----------
+function fgError(msg) {
+  const el = $('#loginErr');
+  if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.textContent = msg; el.style.display = '';
+}
+function showForgot(on) {
+  $('#loginFields').style.display = on ? 'none' : '';
+  $('#forgotPanel').style.display = on ? '' : 'none';
+  fgError('');
+  if (on) { $('#fgAcc').value = $('#loginAcc').value.trim(); $('#fgCode').focus(); }
+  else { $('#loginPwd').focus(); }
+}
+$('#lnkForgot').onclick = () => showForgot(true);
+$('#lnkBackLogin').onclick = () => showForgot(false);
+
+$('#btnForgotApply').onclick = async () => {
+  const acc = $('#fgAcc').value.trim();
+  if (!acc) return fgError('请先填写账号');
+  const btn = $('#btnForgotApply');
+  btn.disabled = true; btn.textContent = '提交中…';
+  try {
+    await api('/api/password/forgot', { method: 'POST', body: JSON.stringify({ account: acc }) });
+    fgError('');
+    toast('申请已提交，请联系管理员 99999 获取验证码');
+    $('#fgCode').focus();
+  } catch (e) { fgError(e.message); }
+  btn.disabled = false; btn.textContent = '① 提交重置申请';
+};
+
+$('#btnForgotReset').onclick = async () => {
+  const acc = $('#fgAcc').value.trim();
+  const code = $('#fgCode').value.trim();
+  const p1 = $('#fgPwd').value, p2 = $('#fgPwd2').value;
+  if (!acc) return fgError('请填写账号');
+  if (!/^\d{6}$/.test(code)) return fgError('请输入管理员发给你的 6 位验证码');
+  if (p1.length < 4) return fgError('新密码至少 4 位');
+  if (p1 !== p2) return fgError('两次输入的新密码不一致');
+  const btn = $('#btnForgotReset');
+  btn.disabled = true; btn.textContent = '重置中…';
+  try {
+    await api('/api/password/reset', { method: 'POST', body: JSON.stringify({ account: acc, code, password: p1 }) });
+    $('#loginAcc').value = acc;
+    $('#fgCode').value = ''; $('#fgPwd').value = ''; $('#fgPwd2').value = '';
+    showForgot(false);
+    toast('密码已重置，请用新密码登录');
+  } catch (e) { fgError(e.message); }
+  btn.disabled = false; btn.textContent = '② 用验证码重置密码';
+};
+
+// ---------- 登录后自助修改密码 ----------
+$('#btnPwd').onclick = () => {
+  $('#pwdErr').style.display = 'none';
+  ['#pwdOld', '#pwdNew', '#pwdNew2'].forEach(s => { $(s).value = ''; });
+  $('#pwdModal').style.display = '';
+  setTimeout(() => $('#pwdOld').focus(), 50);
+};
+$('#btnPwdCancel').onclick = () => { $('#pwdModal').style.display = 'none'; };
+$('#btnPwdSave').onclick = async () => {
+  const err = $('#pwdErr');
+  const oldP = $('#pwdOld').value, n1 = $('#pwdNew').value, n2 = $('#pwdNew2').value;
+  const fail = m => { err.textContent = m; err.style.display = ''; };
+  if (!oldP) return fail('请输入当前密码');
+  if (n1.length < 4) return fail('新密码至少 4 位');
+  if (n1 !== n2) return fail('两次输入的新密码不一致');
+  const btn = $('#btnPwdSave');
+  btn.disabled = true; btn.textContent = '保存中…';
+  try {
+    await api('/api/password/change', { method: 'POST', body: JSON.stringify({ oldPassword: oldP, newPassword: n1 }) });
+    $('#pwdModal').style.display = 'none';
+    toast('密码已修改，下次请用新密码登录');
+  } catch (e) { fail(e.message); }
+  btn.disabled = false; btn.textContent = '保存';
+};
+$('#pwdModal').addEventListener('click', e => { if (e.target.id === 'pwdModal') $('#pwdModal').style.display = 'none'; });
 
 $('#btnLogout').onclick = () => {
   if (!confirm('退出登录？')) return;
@@ -815,7 +974,7 @@ document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
   b.classList.add('active');
   ['teacher', 'grade', 'student', 'stats', 'settings'].forEach(t => $('#tab-' + t).style.display = t === b.dataset.tab ? '' : 'none');
   if (b.dataset.tab === 'stats') renderStats();
-  if (b.dataset.tab === 'settings') { loadAccess(); loadSettings(); if (isAdmin()) loadAccountsAdmin(); }
+  if (b.dataset.tab === 'settings') { loadAccess(); loadSettings(); if (isAdmin()) { loadAccountsAdmin(); loadPwdRequests(); } }
 });
 
 // ---------- 数据加载 ----------
@@ -1271,6 +1430,80 @@ async function saveAccRow(row) {
 
 $('#btnReloadAcc').onclick = () => loadAccountsAdmin();
 $('#accSearch').oninput = () => renderAccList('students');
+
+// ---------- 管理员：密码重置申请 ----------
+async function loadPwdRequests() {
+  if (!isAdmin()) return;
+  $('#pwdReqCard').style.display = '';
+  const box = $('#pwdReqBox');
+  try {
+    const d = await api('/api/password/requests');
+    const act = d.active || [], rec = d.recent || [];
+    const rows = [];
+    if (!act.length) rows.push('<div class="empty">暂无待处理的申请</div>');
+    act.forEach(r => {
+      const issued = r.status === 'issued';
+      rows.push(`<div class="req-row" data-id="${esc(r.id)}" data-exp="${r.expiresAt || ''}">
+        <span class="who">${esc(r.account)}</span>
+        <span class="meta">${r.role === 'teacher' ? '教师' : '学生'} · 申请于 ${fmtTime(r.createdAt)}</span>
+        ${issued
+          ? `<span class="code">${esc(r.code)}</span><span class="meta exp"></span><button class="btn sm ghost copy">复制</button>`
+          : '<button class="btn sm issue">生成验证码</button>'}
+      </div>`);
+    });
+    if (rec.length) {
+      rows.push('<div style="margin-top:14px;font-size:13px;color:var(--muted)"><b>最近处理</b></div>');
+      rec.forEach(r => {
+        const label = r.status === 'used' ? '已重置' : '已过期';
+        rows.push(`<div class="req-row"><span class="who">${esc(r.account)}</span><span class="meta">${r.role === 'teacher' ? '教师' : '学生'} · ${label} · ${fmtTime(r.createdAt)}</span></div>`);
+      });
+    }
+    box.innerHTML = rows.join('');
+    box.querySelectorAll('.issue').forEach(b => { b.onclick = () => issueCode(b.closest('.req-row')); });
+    box.querySelectorAll('.copy').forEach(b => {
+      b.onclick = () => {
+        const code = b.closest('.req-row').querySelector('.code').textContent;
+        if (navigator.clipboard) navigator.clipboard.writeText(code).then(() => toast('已复制验证码 ' + code)).catch(() => toast('验证码 ' + code));
+        else toast('验证码 ' + code);
+      };
+    });
+    tickRequests();
+  } catch (e) {
+    box.innerHTML = '<div class="empty">读取失败：' + esc(e.message) + '</div>';
+  }
+}
+
+function tickRequests() {
+  document.querySelectorAll('#pwdReqBox .req-row[data-exp]').forEach(row => {
+    const exp = row.dataset.exp;
+    const span = row.querySelector('.exp');
+    if (!exp || !span) return;
+    const left = Math.max(0, Math.round((new Date(exp).getTime() - Date.now()) / 1000));
+    span.textContent = left > 0
+      ? '剩余 ' + Math.floor(left / 60) + ' 分 ' + String(left % 60).padStart(2, '0') + ' 秒'
+      : '已过期（需重新申请）';
+    span.style.color = left > 0 ? '' : 'var(--err)';
+  });
+}
+
+async function issueCode(row) {
+  const id = row.dataset.id;
+  const btn = row.querySelector('.issue');
+  btn.disabled = true; btn.textContent = '生成中…';
+  try {
+    const r = await api('/api/password/issue', { method: 'POST', body: JSON.stringify({ id }) });
+    toast('验证码 ' + r.code + '，5 分钟内有效，请发给 ' + (r.account || '申请人'));
+    await loadPwdRequests();
+  } catch (e) {
+    toast(e.message);
+    btn.disabled = false; btn.textContent = '生成验证码';
+    await loadPwdRequests();
+  }
+}
+$('#btnReloadReq').onclick = () => loadPwdRequests();
+setInterval(() => {
+  if (isAdmin() && $('#pwdReqCard') && $('#pwdReqCard').style.display !== 'none') tickRequests();
+}, 5000);
 
 async function loadSettings() {
   if (Cloud.ready) {
