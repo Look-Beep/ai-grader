@@ -2,7 +2,7 @@
   "name": "ai-grader",
   "version": "1.0.0",
   "private": true,
-  "description": "AI 判分系统：老师出题+评分标准，学生提交答案，AI 判分，老师可改分确认",
+  "description": "智慧判：老师出题+评分标准，学生提交答案，AI 判分，老师可改分确认",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

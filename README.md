@@ -1,4 +1,4 @@
-# AI 判分系统
+# 智慧判
 
 老师出题并写好评分标准 → 学生提交答案 → AI 按标准逐条判分并给出理由 → 老师改分确认。
 纯 Node.js 实现，**零第三方依赖**，可整体复制到任何电脑运行。
@@ -42,7 +42,7 @@
 1. 两台设备是否连的同一个 WiFi / 局域网（手机流量不行）。
 2. **Windows 防火墙**：首次启动会弹窗询问，务必勾选「专用网络」并点「允许访问」。
    没弹窗或误点了取消，可用管理员身份执行：
-   `netsh advfirewall firewall add rule name="AI判分系统" dir=in action=allow protocol=TCP localport=3210`
+   `netsh advfirewall firewall add rule name="智慧判" dir=in action=allow protocol=TCP localport=3210`
 3. 学校/公司的 WiFi 常开启「客户端隔离」，此时设备之间互相不可见 —— 换成手机热点或家里网络即可。
 4. 运行服务的电脑不能休眠，服务窗口不能关闭。
 

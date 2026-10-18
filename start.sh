@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AI 判分系统启动脚本（Linux / macOS）
+# 智慧判启动脚本（Linux / macOS）
 # 默认允许局域网内其他电脑/手机访问（在终端里会打印出访问地址）
 # 用法：./start.sh         局域网模式
 #       ./start.sh local   仅本机访问
