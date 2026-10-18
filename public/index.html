@@ -19,12 +19,18 @@
   header { background: var(--card); border-bottom: 1px solid var(--border); padding: 14px 24px;
     display: flex; align-items: center; gap: 24px; position: sticky; top: 0; z-index: 10; }
   .logo { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .logo .mk { width: 26px; height: 26px; border-radius: 8px; flex: 0 0 auto;
+    background: linear-gradient(135deg, #3b6ef5, #6d8ffa); color: #fff;
+    display: flex; align-items: center; justify-content: center; font-size: 13px; }
   .logo .dot { width: 10px; height: 10px; border-radius: 3px; background: var(--primary); display: inline-block; }
-  nav { display: flex; gap: 4px; }
-  nav button { border: none; background: transparent; padding: 8px 16px; border-radius: 8px;
-    cursor: pointer; font-size: 14px; color: var(--muted); }
-  nav button.active { background: var(--primary-weak); color: var(--primary); font-weight: 600; }
-  .llm-badge { margin-left: auto; font-size: 12px; color: var(--muted); }
+  nav { display: flex; gap: 2px; background: #f2f4f7; border-radius: 10px; padding: 3px; }
+  nav button { border: none; background: transparent; padding: 7px 15px; border-radius: 8px;
+    cursor: pointer; font-size: 13.5px; color: var(--muted); white-space: nowrap; }
+  nav button.active { background: #fff; color: var(--primary); font-weight: 600;
+    box-shadow: 0 1px 3px rgba(16,24,40,.10); }
+  .llm-badge { margin-left: auto; font-size: 12px; color: var(--muted); white-space: nowrap;
+    display: flex; align-items: center; gap: 6px; background: #f7f8fa; border: 1px solid var(--border);
+    border-radius: 20px; padding: 5px 11px; }
   .llm-badge .st { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
   .st.on { background: var(--ok); } .st.off { background: var(--err); }
   main { max-width: 980px; margin: 20px auto 60px; padding: 0 20px; }
@@ -143,9 +149,19 @@
   .req-row .who { font-weight: 600; min-width: 84px; }
   .req-row .meta { color: var(--muted); font-size: 12px; }
   .req-row .code { font-family: ui-monospace, monospace; font-size: 14px; font-weight: 700; letter-spacing: 1px; color: #b45309; }
-  .user-box { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); }
-  .user-box .who { white-space: nowrap; }
-  .user-box .who b { color: var(--text); font-weight: 600; }
+  .user-wrap { display: flex; align-items: center; gap: 10px; position: relative; }
+  .user-wrap .ava { width: 32px; height: 32px; border-radius: 50%; background: var(--primary-weak);
+    color: var(--primary); border: 1px solid #dfe7fd; display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 12px; cursor: pointer; user-select: none; flex: 0 0 auto; }
+  .user-wrap .ava.open { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .user-menu { position: absolute; right: 0; top: 40px; background: #fff; border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(16,24,40,.14); padding: 6px; width: 178px; z-index: 30; }
+  .user-menu .who { padding: 8px 10px; border-bottom: 1px solid #f0f2f5; font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+  .user-menu .who b { color: var(--text); font-weight: 600; display: block; font-size: 13.5px; }
+  .um-item { display: block; width: 100%; text-align: left; border: none; background: transparent;
+    padding: 8px 10px; font-size: 13px; color: var(--text); cursor: pointer; border-radius: 7px; }
+  .um-item:hover { background: #f5f6f8; }
+  .um-item.quit { color: var(--err); }
 
   /* ================= 移动端适配（手机浏览器） ================= */
   @media (max-width: 760px) {
@@ -153,13 +169,15 @@
     /* 顶栏：第一行 品牌 + 账号操作，第二行 页签横向滑动，第三行 模型状态 */
     header { flex-wrap: wrap; gap: 8px 10px; padding: 10px 12px; }
     .logo { order: 1; font-size: 15px; flex: 0 0 auto; }
-    .user-box { order: 2; margin-left: auto; gap: 6px; }
-    .user-box .who { font-size: 12px; }
-    nav { order: 3; flex: 1 1 100%; overflow-x: auto; gap: 2px; padding-bottom: 2px;
+    .logo .mk { width: 24px; height: 24px; font-size: 12px; }
+    .user-wrap { order: 2; margin-left: auto; gap: 8px; }
+    .user-wrap .ava { width: 30px; height: 30px; }
+    .llm-badge { order: 3; font-size: 11px; padding: 4px 9px; max-width: 44vw; overflow: hidden; }
+    nav { order: 4; flex: 1 1 100%; overflow-x: auto; gap: 2px; padding-bottom: 2px;
       -webkit-overflow-scrolling: touch; scrollbar-width: none; }
     nav::-webkit-scrollbar { display: none; }
     nav button { flex: 0 0 auto; padding: 7px 12px; font-size: 13px; white-space: nowrap; }
-    .llm-badge { order: 4; flex: 1 1 100%; margin-left: 0; font-size: 11px; }
+    .user-menu { right: -4px; }
 
     main { margin: 12px auto 40px; padding: 0 12px; }
     .card { padding: 14px; border-radius: 10px; margin-bottom: 12px; }
@@ -286,7 +304,7 @@
 </div>
 
 <header id="appHeader" style="display:none">
-  <div class="logo"><span class="dot"></span>AI 判分系统</div>
+  <div class="logo"><span class="mk">AI</span>AI 判分系统</div>
   <nav>
     <button data-tab="teacher" class="active">出题</button>
     <button data-tab="grade">判分与确认</button>
@@ -294,12 +312,15 @@
     <button data-tab="stats">判分对比</button>
     <button data-tab="settings">账号设置</button>
   </nav>
-  <div class="user-box" id="userBox" style="display:none">
-    <span class="who" id="userWho"></span>
-    <button class="btn ghost sm" id="btnPwd">修改密码</button>
-    <button class="btn ghost sm" id="btnLogout">退出</button>
+  <div class="user-wrap" id="userBox" style="display:none">
+    <div class="llm-badge" id="llmBadge"></div>
+    <div class="ava" id="userAva" title="账号菜单">–</div>
+    <div class="user-menu" id="userMenu" style="display:none">
+      <div class="who" id="userWho"></div>
+      <button class="um-item" id="btnPwd">修改密码</button>
+      <button class="um-item quit" id="btnLogout">退出登录</button>
+    </div>
   </div>
-  <div class="llm-badge" id="llmBadge"></div>
 </header>
 <main id="appMain" style="display:none">
   <div class="card" id="llmBanner" style="display:none;border-color:#f0c98b;background:#fff9ef"></div>
@@ -580,12 +601,33 @@ function applyRole() {
   $('#userBox').style.display = '';
   const roleText = isAdmin() ? '管理员' : (isTeacher() ? '教师' : '学生');
   $('#userWho').innerHTML = '<b>' + esc(session.account) + '</b> · ' + roleText;
+  $('#userAva').textContent = String(session.account || '').slice(-2);
+  closeUserMenu();
   if (isStudent()) {
     $('#sName').value = session.account;
     $('#sName').readOnly = true;
     $('#studentHint').textContent = '当前登录账号 ' + session.account + '，提交后成绩记在该账号下';
   }
 }
+
+// 头像菜单：点击头像开合，点击外部或菜单项后收起
+function closeUserMenu() {
+  const m = $('#userMenu'); if (m) m.style.display = 'none';
+  const a = $('#userAva'); if (a) a.classList.remove('open');
+}
+$('#userAva').onclick = e => {
+  e.stopPropagation();
+  const m = $('#userMenu');
+  const open = m.style.display === 'none';
+  m.style.display = open ? '' : 'none';
+  $('#userAva').classList.toggle('open', open);
+};
+document.addEventListener('click', e => {
+  if (!e.target.closest('#userBox')) closeUserMenu();
+});
+['#btnPwd', '#btnLogout'].forEach(sel => {
+  $(sel).addEventListener('click', closeUserMenu);
+});
 
 function switchTab(tab) {
   const btn = document.querySelector('nav button[data-tab="' + tab + '"]');
